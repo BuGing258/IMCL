@@ -12,6 +12,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::Installs::default())
+        .manage(game::launch::Games::default())
         .setup(|app| {
             sysmon::spawn(app.handle().clone());
             Ok(())
@@ -29,6 +30,8 @@ pub fn run() {
             commands::set_mod_enabled,
             commands::trash_version_file,
             commands::probe_java,
+            commands::launch_game,
+            commands::stop_game,
             commands::inspect_game_dir,
             commands::version_settings,
             commands::set_version_settings,

@@ -57,6 +57,32 @@ export interface VersionSettings {
   isolation?: boolean | null;
 }
 
+export interface LaunchRequest {
+  taskId: string;
+  gameDir: string;
+  name: string;
+  java: string;
+  memory: number;
+  windowMode: string;
+  jvmArgs: string;
+  player: string;
+  source: Source;
+  threads: number;
+}
+
+/** 游戏进程结束 */
+export interface GameExit {
+  name: string;
+  code: number | null;
+  /** 是被启动器关掉的 */
+  killed: boolean;
+  crashed: boolean;
+  /** 最后几十行日志 */
+  tail: string[];
+  /** 完整日志文件 */
+  log: string;
+}
+
 export interface GameDirInfo {
   path: string;
   versions: number;
@@ -132,6 +158,10 @@ export const api = {
     invoke("set_mod_enabled", { gameDir, name, file, enabled }),
   trashFile: (gameDir: string, name: string, kind: string, file: string): Promise<void> =>
     invoke("trash_version_file", { gameDir, name, kind, file }),
+
+  /** 补全文件并启动，Java 进程起来后返回进程号 */
+  launch: (req: LaunchRequest): Promise<number> => invoke("launch_game", { req }),
+  stopGame: (): Promise<boolean> => invoke("stop_game"),
 
   probeJava: async (path: string): Promise<JavaInfo> => {
     if (isTauri()) return invoke("probe_java", { path });

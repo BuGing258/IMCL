@@ -17,14 +17,20 @@ pub const OS_NAME: &str = "linux";
 /// 规则里的 "x86" 指 32 位
 const IS_32BIT: bool = cfg!(target_pointer_width = "32");
 
-/// 判断一组 rules 在当前系统上是否允许
+/// 判断一组 rules 在当前系统上是否允许（features 一律当作未开启）
 pub fn rules_allow(rules: Option<&Value>) -> bool {
+    rules_allow_with(rules, &|_| false)
+}
+
+/// 同上，`feature` 返回某个特性（演示模式、自定义分辨率等）是否开启
+pub fn rules_allow_with(rules: Option<&Value>, feature: &dyn Fn(&str) -> bool) -> bool {
     let Some(arr) = rules.and_then(Value::as_array) else { return true };
     let mut allow = false;
     for r in arr {
-        // 带 features 的规则（演示模式、自定义分辨率等）这里一律当作不满足
-        if r.get("features").is_some() {
-            continue;
+        if let Some(f) = r.get("features").and_then(Value::as_object) {
+            if !f.iter().all(|(k, v)| v.as_bool() == Some(feature(k))) {
+                continue;
+            }
         }
         if let Some(os) = r.get("os") {
             let name_ok = os.get("name").and_then(Value::as_str).map_or(true, |n| n == OS_NAME);

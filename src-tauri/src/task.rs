@@ -88,8 +88,8 @@ impl TaskCtx {
         }
     }
 
-    /// 每 300ms 推送一次 `install-progress` 事件，直到 finish()
-    pub fn spawn_reporter(self: &Arc<Self>, app: AppHandle) {
+    /// 每 300ms 推送一次进度事件（`install-progress` / `launch-progress`），直到 finish()
+    pub fn spawn_reporter(self: &Arc<Self>, app: AppHandle, event: &'static str) {
         let ctx = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             let mut last_bytes = 0u64;
@@ -103,7 +103,7 @@ impl TaskCtx {
                 speed = speed * 0.6 + inst * 0.4; // 平滑一下，避免数字乱跳
                 last_bytes = b;
                 last_t = Instant::now();
-                let _ = app.emit("install-progress", ctx.snapshot(speed as u64));
+                let _ = app.emit(event, ctx.snapshot(speed as u64));
             }
         });
     }

@@ -31,7 +31,7 @@ pub fn read_json(zip: &mut ZipArchive<File>, name: &str) -> Result<serde_json::V
 }
 
 /// 拒绝 `..`、绝对路径等会跳出目标目录的条目名
-fn safe_join(base: &Path, rel: &str) -> Result<PathBuf> {
+pub fn safe_join(base: &Path, rel: &str) -> Result<PathBuf> {
     let rel = Path::new(rel);
     if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
         return Err(anyhow!("压缩包里有不安全的路径：{}", rel.display()));

@@ -307,8 +307,6 @@
                           }))}
                         />
                       {/if}
-                    {:else}
-                      <span class="hint">提升帧率、支持光影；可以和原版或 Forge 一起装</span>
                     {/if}
                   </div>
                 </div>

@@ -4,6 +4,8 @@
   import { cubicOut } from "svelte/easing";
   import TitleBar from "$lib/components/TitleBar.svelte";
   import Toast from "$lib/components/Toast.svelte";
+  import Tooltip from "$lib/components/Tooltip.svelte";
+  import GameProblem from "$lib/components/GameProblem.svelte";
   import Home from "$lib/pages/Home.svelte";
   import Versions from "$lib/pages/Versions.svelte";
   import Download from "$lib/pages/Download.svelte";
@@ -102,6 +104,8 @@
     {/key}
   </main>
   <Toast />
+  <Tooltip />
+  <GameProblem />
 </div>
 
 <style>

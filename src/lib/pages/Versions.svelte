@@ -20,6 +20,8 @@
 
   const sel = $derived<Pack | undefined>(library.packs.find((p) => p.id === selId) ?? library.packs[0]);
   const isCurrent = $derived(!!sel && sel.id === library.currentId);
+  /** 正在启动 / 运行的就是选中的这个版本 */
+  const mine = $derived(!!sel && game.status !== "idle" && game.packId === sel.id);
   const dirOptions = $derived(settings.gameDirs.map((d) => ({ value: d.path, label: d.name, hint: d.path })));
   const dirName_ = $derived(settings.gameDirs.find((d) => d.path === settings.gameDir)?.name ?? "游戏目录");
   const enabled = $derived(sel?.mods.filter((m) => m.enabled).length ?? 0);
@@ -50,12 +52,10 @@
   function launch() {
     if (!sel) return;
     if (game.status !== "idle") {
-      if (isCurrent) game.stop();
+      if (game.packId === sel.id) game.stop();
       return;
     }
-    library.currentId = sel.id;
-    game.start();
-    toast.show(`正在启动 ${sel.name}（启动功能还是演示）`);
+    game.start(sel);
   }
 
   function goDownload(kind: ResKind) {
@@ -184,8 +184,21 @@
               <h1>{sel.name}</h1>
               <p class="meta">{meta(sel)}</p>
               <div class="actions">
-                <button class="btn btn-primary btn-pill" onclick={launch} disabled={game.status !== "idle" && !isCurrent}>
-                  {#if game.status !== "idle" && isCurrent}<Square size={14} fill="currentColor" />停止{:else}<Play size={14} fill="currentColor" />启动{/if}
+                <button
+                  class="btn btn-primary btn-pill"
+                  onclick={launch}
+                  disabled={game.status !== "idle" && !mine}
+                  title={game.status !== "idle" && !mine ? "已经有一个版本在运行" : undefined}
+                >
+                  {#if !mine}
+                    <Play size={14} fill="currentColor" />启动
+                  {:else if game.status === "preparing"}
+                    <Square size={14} fill="currentColor" />取消启动 {Math.round(game.progress)}%
+                  {:else if game.confirmStop}
+                    <Square size={14} fill="currentColor" />再点一次强制关闭
+                  {:else}
+                    <Square size={14} fill="currentColor" />{game.ready ? "强制关闭" : "正在打开…"}
+                  {/if}
                 </button>
                 {#if !isCurrent}
                   <button class="btn btn-pill" onclick={() => (library.currentId = sel.id)} disabled={game.status !== "idle"}>

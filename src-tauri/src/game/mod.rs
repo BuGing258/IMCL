@@ -2,6 +2,7 @@
 
 pub mod installed;
 pub mod json;
+pub mod launch;
 pub mod meta;
 
 mod forge;

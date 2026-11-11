@@ -1,7 +1,7 @@
 // 全局界面状态（Svelte 5 runes）。
 // 已接后端：系统状态、下载安装、已安装版本。其余（Mod 市场、启动游戏、账户登录）仍是前端模拟。
 import { listen } from "@tauri-apps/api/event";
-import { api, isTauri, type InstallRequest, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
+import { api, isTauri, type GameExit, type InstallRequest, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
 import { mockPacks, packLook, type Loader, type Pack, type ResKind } from "./mock";
 
 export { isTauri };
@@ -548,41 +548,205 @@ export async function initBackend() {
   await library.refresh();
 }
 
-/* ---------- 游戏启动（模拟） ---------- */
+/* ---------- 启动游戏 ----------
+ * Tauri 里：调用后端补全文件、启动 Java，之后靠 game-ready / game-exit 事件更新状态。
+ * 浏览器预览：假进度。
+ */
+export interface GameProblem {
+  title: string;
+  detail: string;
+  /** 崩溃前最后几行日志 */
+  tail?: string[];
+  /** 日志文件路径 */
+  log?: string;
+}
+
+const LAUNCH_STAGES = 5;
+
 class Game {
   status = $state<"idle" | "preparing" | "running">("idle");
-  progress = $state(0);
+  /** 游戏窗口已经出现 */
+  ready = $state(false);
+  /** 正在启动 / 运行的版本 */
+  packId = $state("");
+  stage = $state("准备中");
+  stageIndex = $state(0);
+  done = $state(0);
+  total = $state(0);
   elapsed = $state(0);
-  step = $derived(
-    this.progress < 25 ? "检查游戏文件" : this.progress < 75 ? "补全资源文件" : "启动 Java 进程",
-  );
-  #timer: ReturnType<typeof setInterval> | undefined;
+  /** 启动失败或崩溃时弹出的说明 */
+  problem = $state<GameProblem | null>(null);
+  /** 停止要点两次，防止误关丢存档 */
+  confirmStop = $state(false);
 
-  start() {
-    if (this.status !== "idle") return;
-    this.status = "preparing";
-    this.progress = 0;
-    this.#timer = setInterval(() => {
-      this.progress = Math.min(100, this.progress + 1.6);
-      if (this.progress >= 100) {
-        clearInterval(this.#timer);
-        this.status = "running";
-        this.elapsed = 0;
-        this.#timer = setInterval(() => this.elapsed++, 1000);
+  progress = $derived(
+    Math.min(100, ((Math.max(this.stageIndex, 1) - 1 + (this.total ? this.done / this.total : 0)) / LAUNCH_STAGES) * 100),
+  );
+  step = $derived(this.stage);
+
+  #taskId = "";
+  #timer: ReturnType<typeof setInterval> | undefined;
+  #readyTimer: ReturnType<typeof setTimeout> | undefined;
+  #confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  #listening = false;
+
+  #listen() {
+    if (this.#listening || !isTauri()) return;
+    this.#listening = true;
+    listen<ProgressEvent>("launch-progress", (e) => {
+      const p = e.payload;
+      if (p.taskId !== this.#taskId || this.status !== "preparing") return;
+      this.stage = p.stage;
+      this.stageIndex = p.stageIndex;
+      this.done = p.done;
+      this.total = p.total;
+    });
+    listen<string>("game-ready", () => {
+      if (this.status === "running") this.ready = true;
+    });
+    listen<GameExit>("game-exit", (e) => {
+      const x = e.payload;
+      const name = this.#packName();
+      this.#reset();
+      if (x.crashed) {
+        this.problem = {
+          title: x.code === null ? "游戏异常退出" : `游戏异常退出（退出码 ${x.code}）`,
+          detail: `${x.name} 意外关闭了。下面是最后的日志，常见原因：Mod 不兼容、缺少前置 Mod、内存不够或 Java 版本不对。`,
+          tail: x.tail,
+          log: x.log,
+        };
+      } else {
+        toast.show(x.killed ? `已关闭 ${name}` : `${name} 已退出`);
       }
-    }, 40);
+    });
+  }
+
+  #packName() {
+    return library.packs.find((p) => p.id === this.packId)?.name ?? this.packId;
+  }
+
+  #reset() {
+    clearInterval(this.#timer);
+    clearTimeout(this.#readyTimer);
+    clearTimeout(this.#confirmTimer);
+    this.status = "idle";
+    this.ready = false;
+    this.confirmStop = false;
+    this.elapsed = 0;
+    this.stageIndex = 0;
+    this.done = 0;
+    this.total = 0;
+  }
+
+  #startClock() {
+    this.status = "running";
+    this.elapsed = 0;
+    this.#timer = setInterval(() => this.elapsed++, 1000);
+    // 有些版本日志里没有就绪标记，过一会儿就当作窗口已经出来了
+    this.#readyTimer = setTimeout(() => (this.ready = true), 25_000);
+  }
+
+  async start(pack?: Pack) {
+    if (this.status !== "idle") return;
+    const p = pack ?? library.current;
+    if (!p) return;
+    library.currentId = p.id;
+    this.problem = null;
+    this.packId = p.id;
+    this.stage = "准备中";
+    this.stageIndex = 0;
+
+    const vs = await library.loadSettings(p).catch(() => ({}) as VersionSettings);
+    const acc = accounts.list.find((a) => a.id === vs.account) ?? accounts.current;
+    if (acc.type !== "offline") {
+      toast.show(`${ACCOUNT_LABELS[acc.type]}还没接入，请先用离线账户`);
+      return;
+    }
+
+    this.status = "preparing";
+    if (!isTauri()) return this.#simulate();
+    this.#listen();
+    const taskId = `l-${Date.now()}`;
+    this.#taskId = taskId;
+    try {
+      await api.launch({
+        taskId,
+        gameDir: settings.gameDir,
+        name: p.name,
+        java: vs.java ?? settings.java,
+        memory: vs.memory ?? settings.memory,
+        windowMode: vs.windowMode ?? settings.windowMode,
+        jvmArgs: vs.jvmArgs ?? settings.jvmArgs,
+        player: acc.name,
+        source: settings.source,
+        threads: settings.threads,
+      });
+      if (this.#taskId !== taskId) return;
+      // 准备期间点了取消：进程刚起来就关掉
+      if (this.status !== "preparing") {
+        api.stopGame();
+        return;
+      }
+      this.#startClock();
+    } catch (e) {
+      if (this.#taskId !== taskId) return;
+      this.#reset();
+      const msg = String(e);
+      if (!msg.includes("已取消")) this.problem = { title: "启动失败", detail: msg };
+    }
   }
 
   stop() {
-    clearInterval(this.#timer);
-    this.status = "idle";
-    this.progress = 0;
-    this.elapsed = 0;
+    if (this.status === "preparing") {
+      if (isTauri()) api.cancel(this.#taskId);
+      this.#reset();
+      toast.show("已取消启动");
+      return;
+    }
+    if (this.status !== "running") return;
+    // 第一次点只提示，3 秒内再点才真的关掉（强制关闭可能丢失最后的存档进度）
+    if (!this.confirmStop) {
+      this.confirmStop = true;
+      clearTimeout(this.#confirmTimer);
+      this.#confirmTimer = setTimeout(() => (this.confirmStop = false), 3000);
+      return;
+    }
+    this.confirmStop = false;
+    if (isTauri()) api.stopGame();
+    else {
+      const name = this.#packName();
+      this.#reset();
+      toast.show(`已关闭 ${name}`);
+    }
   }
 
   toggle() {
     if (this.status === "idle") this.start();
     else this.stop();
+  }
+
+  /** 浏览器预览：假进度 */
+  #simulate() {
+    const stages = ["检查版本信息", "补全游戏文件", "补全资源文件", "解压 natives", "启动 Java"];
+    this.stageIndex = 1;
+    this.stage = stages[0];
+    this.total = 100;
+    this.done = 0;
+    this.#timer = setInterval(() => {
+      if (this.status !== "preparing") return clearInterval(this.#timer);
+      this.done += 9;
+      if (this.done >= 100) {
+        this.done = 0;
+        this.stageIndex++;
+        if (this.stageIndex > stages.length) {
+          clearInterval(this.#timer);
+          this.#startClock();
+          setTimeout(() => (this.ready = true), 1500);
+          return;
+        }
+        this.stage = stages[this.stageIndex - 1];
+      }
+    }, 40);
   }
 }
 export const game = new Game();

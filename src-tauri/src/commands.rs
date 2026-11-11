@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 
-use crate::game::{self, installed, meta};
+use crate::game::{self, installed, launch, meta};
 use crate::java::{self, JavaInfo};
 use crate::net::Source;
 use crate::task::TaskCtx;
@@ -66,12 +66,43 @@ pub async fn install_version(app: AppHandle, installs: State<'_, Installs>, req:
 
     let stages = 4 + u32::from(req.loader.is_some()) + u32::from(req.optifine.is_some());
     let ctx = TaskCtx::new(req.task_id.clone(), cancel, stages);
-    ctx.spawn_reporter(app);
+    ctx.spawn_reporter(app, "install-progress");
 
     let result = game::install(&ctx, &req).await;
     ctx.finish();
     installs.0.lock().unwrap().remove(&req.task_id);
     result.map_err(err)
+}
+
+/// 补全文件并启动游戏；Java 进程起来后返回进程号。之后的状态通过 `game-ready` / `game-exit` 事件推送
+#[tauri::command]
+pub async fn launch_game(
+    app: AppHandle,
+    installs: State<'_, Installs>,
+    games: State<'_, launch::Games>,
+    req: launch::LaunchRequest,
+) -> CmdResult<u32> {
+    if let Some(r) = games.0.lock().unwrap().as_ref() {
+        return Err(format!("{} 正在运行，先关掉它再启动", r.name));
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    installs.0.lock().unwrap().insert(req.task_id.clone(), Arc::clone(&cancel));
+    let ctx = TaskCtx::new(req.task_id.clone(), cancel, launch::STAGES);
+    ctx.spawn_reporter(app.clone(), "launch-progress");
+
+    let prepared = launch::prepare(&ctx, &req).await;
+    ctx.finish();
+    installs.0.lock().unwrap().remove(&req.task_id);
+    let prepared = prepared.map_err(err)?;
+    if ctx.is_cancelled() {
+        return Err("已取消".into());
+    }
+    launch::spawn(app, req.name.clone(), prepared).map_err(err)
+}
+
+#[tauri::command]
+pub fn stop_game(games: State<'_, launch::Games>) -> bool {
+    games.stop()
 }
 
 #[tauri::command]

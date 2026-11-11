@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fly } from "svelte/transition";
+  import { tick } from "svelte";
   import {
     Layers,
     UserRound,
@@ -10,7 +11,7 @@
     Play,
     Square,
     Pickaxe,
-    ArrowLeftRight,
+    ChevronsUpDown,
     Check,
   } from "@lucide/svelte";
   import Tile from "$lib/components/Tile.svelte";
@@ -20,6 +21,9 @@
   import { api } from "$lib/api";
 
   let pickerOpen = $state(false);
+  let active = $state(0);
+  let listEl = $state<HTMLDivElement>();
+  const canSwitch = $derived(game.status === "idle");
 
   const hour = new Date().getHours();
   const greet = hour < 6 ? "夜深了" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
@@ -67,6 +71,53 @@
     return () => sysmon.stop();
   });
 
+  async function openPicker() {
+    pickerOpen = true;
+    active = Math.max(0, library.packs.findIndex((p) => p.id === library.currentId));
+    await tick();
+    scrollActive("center");
+  }
+
+  function scrollActive(block: ScrollLogicalPosition = "nearest") {
+    listEl?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView({ block });
+  }
+
+  function choose(id: string) {
+    if (!canSwitch) return;
+    library.currentId = id;
+    pickerOpen = false;
+  }
+
+  // 在版本卡片上滚动滚轮：直接切换上一个 / 下一个版本
+  let wheelLock = 0;
+  function onCardWheel(e: WheelEvent) {
+    if (pickerOpen || !canSwitch || library.packs.length < 2) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - wheelLock < 120 || Math.abs(e.deltaY) < 4) return;
+    wheelLock = now;
+    const i = library.packs.findIndex((p) => p.id === library.currentId);
+    const n = Math.min(library.packs.length - 1, Math.max(0, i + (e.deltaY > 0 ? 1 : -1)));
+    library.currentId = library.packs[n].id;
+  }
+
+  function onPickerKey(e: KeyboardEvent) {
+    if (!pickerOpen) return;
+    const n = library.packs.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+      scrollActive();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      choose(library.packs[active].id);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      pickerOpen = false;
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
     // 只在没有聚焦任何控件时响应 Enter，避免和按钮自身的回车冲突
     if (e.key === "Enter" && e.target === document.body && !pickerOpen && pack) {
@@ -92,16 +143,24 @@
           class:open={pickerOpen}
           onclick={(e) => {
             e.stopPropagation();
-            pickerOpen = !pickerOpen;
+            if (pickerOpen) pickerOpen = false;
+            else openPicker();
           }}
-          title="切换版本"
+          onkeydown={onPickerKey}
+          onwheel={onCardWheel}
+          aria-haspopup="listbox"
+          aria-expanded={pickerOpen}
+          title={canSwitch ? "点击选择版本，也可以在这里滚动滚轮切换" : "游戏运行中，不能切换版本"}
         >
           <PackCover {pack} size={40} />
           <div class="pc-text">
             <b>{pack.name}</b>
             <span>{pack.mc} {pack.loader}{pack.optifine ? " + OptiFine" : ""}{pack.mods.length ? ` · ${pack.mods.length} 个 Mod` : ""}</span>
           </div>
-          <ArrowLeftRight size={16} />
+          {#if library.packs.length > 1}
+            <span class="pc-count">{library.packs.findIndex((p) => p.id === pack.id) + 1}/{library.packs.length}</span>
+          {/if}
+          <ChevronsUpDown size={16} />
         </button>
       {:else}
         <button class="pack-card empty" onclick={() => nav.go("download")}>
@@ -116,22 +175,32 @@
       {#if pickerOpen && pack}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div class="picker" transition:fly={{ y: -6, duration: 160 }} onclick={(e) => e.stopPropagation()}>
-          {#each library.packs as p (p.id)}
-            <button
-              class="pk"
-              class:on={p.id === library.currentId}
-              disabled={game.status !== "idle"}
-              onclick={() => {
-                library.currentId = p.id;
-                pickerOpen = false;
-              }}
-            >
-              <PackCover pack={p} size={28} />
-              <span class="pk-name">{p.name}</span>
-              <span class="pk-ver">{p.mc}</span>
-              {#if p.id === library.currentId}<Check size={16} />{/if}
-            </button>
-          {/each}
+          <div class="pk-head">
+            <span>选择版本</span>
+            <span class="faint">共 {library.packs.length} 个</span>
+          </div>
+          <div class="pk-list" bind:this={listEl} role="listbox" aria-label="选择版本">
+            {#each library.packs as p, i (p.id)}
+              <button
+                class="pk"
+                class:on={p.id === library.currentId}
+                class:active={i === active}
+                data-i={i}
+                role="option"
+                aria-selected={p.id === library.currentId}
+                disabled={!canSwitch}
+                onpointermove={() => (active = i)}
+                onclick={() => choose(p.id)}
+              >
+                <PackCover pack={p} size={32} />
+                <span class="pk-text">
+                  <span class="pk-name">{p.name}</span>
+                  <span class="pk-ver">{p.mc} · {p.loader}{p.optifine ? " + OptiFine" : ""}</span>
+                </span>
+                {#if p.id === library.currentId}<Check size={16} />{/if}
+              </button>
+            {/each}
+          </div>
           <button class="pk more" onclick={() => nav.go("versions")}>管理版本…</button>
         </div>
       {/if}
@@ -162,11 +231,17 @@
           <span>以 {account.name} 的身份进入 · 按 Enter 启动</span>
         {:else if game.status === "preparing"}
           <b>{Math.round(game.progress)}%</b>
-          <span>{game.step}…</span>
+          <span>{game.step}{game.total > 1 ? ` ${game.done}/${game.total}` : ""}… · 点击取消</span>
           <div class="bar"><div style:width="{game.progress}%"></div></div>
+        {:else if game.confirmStop}
+          <b>强制关闭？</b>
+          <span>再点一次关闭游戏，没保存的进度可能会丢失</span>
+        {:else if !game.ready}
+          <b><span class="live"></span>正在打开</b>
+          <span>游戏窗口马上出现…</span>
         {:else}
           <b><span class="live"></span>游戏运行中</b>
-          <span>已游玩 {fmtTime(game.elapsed)} · 点击停止</span>
+          <span>已游玩 {fmtTime(game.elapsed)} · 点击可强制关闭</span>
         {/if}
       </div>
     </button>
@@ -300,6 +375,11 @@
     color: var(--text);
     font-size: 15px;
   }
+  .pc-count {
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
   .pc-text span {
     font-size: 12px;
   }
@@ -316,6 +396,22 @@
     border: 1px solid var(--border-strong);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   }
+  .pk-head {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 8px 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .pk-list {
+    max-height: min(300px, 46vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .pk {
     width: 100%;
     display: flex;
@@ -325,19 +421,32 @@
     border-radius: var(--r);
     font-size: 13px;
     color: var(--red);
+    text-align: left;
+    flex-shrink: 0;
   }
-  .pk:hover:not(:disabled) {
+  .pk.active:not(:disabled) {
     background: var(--hover);
+  }
+  .pk.on {
+    background: var(--red-soft);
   }
   .pk:disabled {
     opacity: 0.5;
   }
-  .pk-name {
+  .pk-text {
     flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .pk-name {
     color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .pk-ver {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-3);
   }
   .pk.on .pk-name {
@@ -350,6 +459,9 @@
     border-top: 1px solid var(--border);
     border-radius: 0 0 var(--r) var(--r);
     padding-top: 8px;
+  }
+  .pk.more:hover {
+    background: var(--hover);
   }
 
   /* ---------- 开始游戏 ---------- */
