@@ -10,7 +10,15 @@
   import Mods from "$lib/pages/Mods.svelte";
   import Accounts from "$lib/pages/Accounts.svelte";
   import Settings from "$lib/pages/Settings.svelte";
-  import { nav, settings, accounts, saveSettings, type PageId } from "$lib/state.svelte";
+  import { nav, settings, accounts, library, saveSettings, initBackend, type PageId } from "$lib/state.svelte";
+
+  // 取默认游戏目录、扫描已安装的版本
+  initBackend();
+
+  // 记住首页选中的版本
+  $effect(() => {
+    if (library.loaded && library.currentId) settings.selectedVersion = library.currentId;
+  });
 
   const PAGES: Record<PageId, Component> = {
     home: Home,

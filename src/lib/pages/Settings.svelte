@@ -1,7 +1,24 @@
 <script lang="ts">
-  import { settings } from "$lib/state.svelte";
+  import { FolderOpen, X } from "@lucide/svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import Select from "$lib/components/Select.svelte";
+  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem } from "$lib/state.svelte";
 
-  const memLabel = $derived(settings.memory >= 1024 ? `${(settings.memory / 1024).toFixed(1).replace(/\.0$/, "")} GB` : `${settings.memory} MB`);
+  const dirOptions = $derived(settings.gameDirs.map((d) => ({ value: d.path, label: d.name, hint: d.path })));
+
+  async function openDir() {
+    if (!isTauri()) return toast.show("浏览器预览里打不开文件夹");
+    try {
+      await revealItemInDir(settings.gameDir);
+    } catch (e) {
+      toast.show(`打不开：${e}（文件夹可能还不存在，装一个版本后就有了）`);
+    }
+  }
+
+  async function browseJava() {
+    const p = await javas.browse();
+    if (p) settings.java = p;
+  }
 </script>
 
 <div class="page-scroll">
@@ -16,21 +33,57 @@
     <section class="group" style:--i={1}>
       <h2>游戏</h2>
       <div class="row">
-        <div class="lbl"><b>最大内存</b><span>建议不超过电脑内存的一半</span></div>
+        <div class="lbl">
+          <b>游戏目录</b>
+          <span>可以添加其他启动器的 .minecraft，里面已装的版本会直接读出来；也可以在版本管理里切换</span>
+        </div>
         <div class="ctl">
-          <input type="range" min="1024" max="16384" step="512" bind:value={settings.memory} aria-label="最大内存" />
-          <span class="val">{memLabel}</span>
+          <Select
+            bind:value={settings.gameDir}
+            options={dirOptions}
+            actions={[{ label: "添加游戏文件夹…", onclick: () => gameDirs.add() }]}
+            width="220px"
+            ariaLabel="游戏目录"
+            onchange={(v) => gameDirs.switchTo(v)}
+          />
+          <button class="btn btn-icon" onclick={openDir} aria-label="打开游戏目录" title="打开"><FolderOpen size={15} /></button>
+          {#if !gameDirs.isDefault(settings.gameDir)}
+            <button class="btn btn-icon" onclick={() => gameDirs.remove(settings.gameDir)} aria-label="从列表移除" title="从列表移除（不删除文件）"><X size={15} /></button>
+          {/if}
         </div>
       </div>
       <div class="row">
-        <div class="lbl"><b>Java</b><span>自动选择会按游戏版本挑合适的 Java</span></div>
+        <div class="lbl"><b>最大内存</b><span>建议不超过电脑内存的一半</span></div>
         <div class="ctl">
-          <select class="input" bind:value={settings.java} aria-label="Java">
-            <option value="auto">自动选择</option>
-            <option value="21">Java 21</option>
-            <option value="17">Java 17</option>
-            <option value="8">Java 8</option>
-          </select>
+          <input type="range" min="1024" max="16384" step="512" bind:value={settings.memory} aria-label="最大内存" />
+          <span class="val">{fmtMem(settings.memory)}</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="lbl">
+          <b>Java</b>
+          <span>
+            {javas.found === null
+              ? "正在查找电脑上的 Java…"
+              : javas.all.length
+                ? `找到 ${javas.all.length} 个；自动选择会按游戏版本挑合适的`
+                : "没找到 Java，装 Forge / OptiFine 和启动游戏都需要它"}
+          </span>
+        </div>
+        <div class="ctl">
+          <Select
+            bind:value={settings.java}
+            options={javaOptions()}
+            actions={[{ label: "浏览 java.exe…", onclick: browseJava }]}
+            width="260px"
+            ariaLabel="Java"
+          />
+        </div>
+      </div>
+      <div class="row">
+        <div class="lbl"><b>JVM 参数</b><span>追加在启动参数里，不懂可以留空</span></div>
+        <div class="ctl">
+          <input class="input mono" bind:value={settings.jvmArgs} placeholder="例如 -XX:+UseG1GC" spellcheck="false" aria-label="JVM 参数" />
         </div>
       </div>
       <div class="row">
@@ -82,7 +135,7 @@
     <section class="group" style:--i={4}>
       <h2>关于</h2>
       <div class="row">
-        <div class="lbl"><b>AMC Launcher 0.1.0</b><span>界面预览版，所有功能都是演示</span></div>
+        <div class="lbl"><b>AMC Launcher 0.1.0</b><span>下载安装、版本管理已可用；启动游戏和 Mod 下载还在做</span></div>
       </div>
     </section>
   </div>
@@ -149,6 +202,14 @@
   }
   .ctl input[type="range"] {
     width: 180px;
+  }
+  .ctl {
+    gap: 6px;
+  }
+  .ctl .input.mono {
+    width: 260px;
+    font-family: var(--mono);
+    font-size: 12px;
   }
   .val {
     min-width: 56px;

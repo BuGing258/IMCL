@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image } from "@lucide/svelte";
-  import { library, toast, ui, fmtCount } from "$lib/state.svelte";
+  import Select from "$lib/components/Select.svelte";
+  import { library, toast, ui, nav, fmtCount } from "$lib/state.svelte";
   import { mockMarket, RES_CATEGORIES, RES_LABELS, type MarketItem, type ResKind } from "$lib/mock";
 
   const KINDS: { k: ResKind; icon: typeof Puzzle }[] = [
@@ -13,11 +14,20 @@
   let installing = $state<Record<string, boolean>>({});
 
   const pack = $derived(library.current);
-  const hasIris = $derived(pack.mods.some((m) => m.id === "iris" && m.enabled));
+  // 真实版本里 Mod 的 id 是文件名（比如 iris-1.7.0+mc1.20.1.jar），按包含关系判断
+  const hasMod = (id: string) => !!pack?.mods.some((x) => x.id.toLowerCase().includes(id));
+  const shaderReady = $derived(
+    !!pack && (!!pack.optifine || pack.mods.some((m) => m.enabled && m.id.toLowerCase().includes("iris"))),
+  );
   const cats = $derived(["全部", ...RES_CATEGORIES[ui.resKind]]);
 
-  // Mod 需要加载器；光影和材质包任何版本都能装（光影要 Iris 才能生效，下面会提示）
-  const canInstall = $derived(ui.resKind !== "mod" || pack.loader !== "原版");
+  // Mod 需要加载器；光影和材质包任何版本都能装（光影要 Iris 或 OptiFine 才能生效，下面会提示）
+  const canInstall = $derived(!!pack && (ui.resKind !== "mod" || pack.loader !== "原版"));
+
+  // 真实版本先读一下文件夹，才知道哪些已经装了
+  $effect(() => {
+    if (pack?.real && !pack.filesLoaded) library.loadFiles(pack).catch(() => {});
+  });
 
   const results = $derived(
     mockMarket.filter((m) => {
@@ -34,12 +44,17 @@
   }
 
   function has(m: MarketItem) {
-    if (m.kind === "mod") return pack.mods.some((x) => x.id === m.id);
-    return (m.kind === "shader" ? pack.shaders : pack.resourcepacks).includes(m.id);
+    if (!pack) return false;
+    if (m.kind === "mod") return hasMod(m.id);
+    return (m.kind === "shader" ? pack.shaders : pack.resourcepacks).some((x) => x.toLowerCase().includes(m.id));
   }
 
   function install(m: MarketItem) {
-    if (!canInstall || installing[m.id] || has(m)) return;
+    if (!pack || !canInstall || installing[m.id] || has(m)) return;
+    if (pack.real) {
+      toast.show("Mod / 光影 / 材质包下载还没接入，下一步做");
+      return;
+    }
     const target = pack;
     installing[m.id] = true;
     setTimeout(() => {
@@ -62,16 +77,19 @@
     <div class="page-head">
       <div>
         <h1>Mod</h1>
-        <p>Mod、光影、材质包都在这里下载（演示数据）</p>
+        <p>Mod、光影、材质包都在这里下载（列表目前是演示数据）</p>
       </div>
-      <label class="target">
-        <span class="muted">安装到</span>
-        <select class="input" bind:value={library.currentId}>
-          {#each library.packs as p (p.id)}
-            <option value={p.id}>{p.name}（{p.mc} {p.loader}）</option>
-          {/each}
-        </select>
-      </label>
+      {#if pack}
+        <label class="target">
+          <span class="muted">安装到</span>
+          <Select
+            bind:value={library.currentId}
+            width="240px"
+            ariaLabel="安装到哪个版本"
+            options={library.packs.map((p) => ({ value: p.id, label: p.name, hint: `${p.mc} ${p.loader}` }))}
+          />
+        </label>
+      {/if}
     </div>
 
     <div class="kinds">
@@ -82,18 +100,28 @@
       {/each}
     </div>
 
-    {#if !canInstall}
+    {#if !pack}
+      <div class="warn">
+        <Info size={16} />
+        <span>还没有安装任何版本，先去下载一个游戏版本。</span>
+        <button class="btn btn-sm" onclick={() => nav.go("download")}>下载游戏</button>
+      </div>
+    {:else if !canInstall}
       <div class="warn">
         <Info size={16} />
         <span>原版不能安装 Mod。请在右上角换成 Fabric、Forge 之类的版本。</span>
       </div>
-    {:else if ui.resKind === "shader" && !hasIris}
+    {:else if ui.resKind === "shader" && !shaderReady}
       <div class="warn">
         <Info size={16} />
         <span>
-          {pack.loader === "原版" ? "原版用不了光影，需要换成装了 Iris 的 Fabric 版本。" : "当前版本还没装 Iris，光影装了也不会生效。"}
+          {pack.loader === "原版"
+            ? "原版用不了光影，需要装 OptiFine，或换成装了 Iris 的 Fabric 版本。"
+            : pack.loader === "Fabric" || pack.loader === "Quilt"
+              ? "当前版本还没装 Iris，光影装了也不会生效。"
+              : "当前版本没有 OptiFine 或 Iris，光影装了也不会生效。"}
         </span>
-        {#if pack.loader !== "原版"}<button class="btn btn-sm" onclick={findIris}>去装 Iris</button>{/if}
+        {#if pack.loader === "Fabric" || pack.loader === "Quilt"}<button class="btn btn-sm" onclick={findIris}>去装 Iris</button>{/if}
       </div>
     {/if}
 
@@ -152,9 +180,6 @@
     align-items: center;
     gap: 8px;
     font-size: 13px;
-  }
-  .target select {
-    max-width: 240px;
   }
   .kinds {
     display: grid;

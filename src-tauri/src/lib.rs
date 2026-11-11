@@ -1,15 +1,38 @@
-// 下载、启动等功能之后在这里加 #[tauri::command]。
-
+mod commands;
+pub mod game;
+pub mod java;
+pub mod maven;
+pub mod net;
 mod sysmon;
+pub mod task;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .manage(commands::Installs::default())
         .setup(|app| {
             sysmon::spawn(app.handle().clone());
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            commands::default_game_dir,
+            commands::version_manifest,
+            commands::loader_versions,
+            commands::optifine_versions,
+            commands::find_java,
+            commands::install_version,
+            commands::cancel_install,
+            commands::list_installed,
+            commands::version_files,
+            commands::set_mod_enabled,
+            commands::trash_version_file,
+            commands::probe_java,
+            commands::inspect_game_dir,
+            commands::version_settings,
+            commands::set_version_settings,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

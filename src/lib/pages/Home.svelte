@@ -16,8 +16,8 @@
   import Tile from "$lib/components/Tile.svelte";
   import PackCover from "$lib/components/PackCover.svelte";
   import PixelAvatar from "$lib/components/PixelAvatar.svelte";
-  import { nav, library, game, settings, accounts, sysmon, ACCOUNT_LABELS, fmtTime } from "$lib/state.svelte";
-  import { mockVersions } from "$lib/mock";
+  import { nav, library, game, settings, accounts, sysmon, installs, ACCOUNT_LABELS, fmtTime } from "$lib/state.svelte";
+  import { api } from "$lib/api";
 
   let pickerOpen = $state(false);
 
@@ -26,8 +26,17 @@
 
   const pack = $derived(library.current);
   const account = $derived(accounts.current);
-  const latest = mockVersions.find((v) => v.type === "release")!;
-  const resCount = $derived(pack.mods.length + pack.shaders.length + pack.resourcepacks.length);
+
+  // 最新正式版（后端有 10 分钟缓存，这里拿不到也不影响）
+  let latest = $state("");
+  api.manifest(settings.source)
+    .then((m) => (latest = m.find((v) => v.type === "release")?.id ?? ""))
+    .catch(() => {});
+
+  function onStart() {
+    if (!pack && game.status === "idle") nav.go("download");
+    else game.toggle();
+  }
 
   const gauges = $derived(
     sysmon.ready
@@ -60,7 +69,7 @@
 
   function onKey(e: KeyboardEvent) {
     // 只在没有聚焦任何控件时响应 Enter，避免和按钮自身的回车冲突
-    if (e.key === "Enter" && e.target === document.body && !pickerOpen) {
+    if (e.key === "Enter" && e.target === document.body && !pickerOpen && pack) {
       e.preventDefault();
       game.toggle();
     }
@@ -77,24 +86,34 @@
     </header>
 
     <div class="picker-wrap">
-      <button
-        class="pack-card"
-        class:open={pickerOpen}
-        onclick={(e) => {
-          e.stopPropagation();
-          pickerOpen = !pickerOpen;
-        }}
-        title="切换版本"
-      >
-        <PackCover {pack} size={40} />
-        <div class="pc-text">
-          <b>{pack.name}</b>
-          <span>{pack.mc} {pack.loader}{pack.mods.length ? ` · ${pack.mods.length} 个 Mod` : ""}</span>
-        </div>
-        <ArrowLeftRight size={16} />
-      </button>
+      {#if pack}
+        <button
+          class="pack-card"
+          class:open={pickerOpen}
+          onclick={(e) => {
+            e.stopPropagation();
+            pickerOpen = !pickerOpen;
+          }}
+          title="切换版本"
+        >
+          <PackCover {pack} size={40} />
+          <div class="pc-text">
+            <b>{pack.name}</b>
+            <span>{pack.mc} {pack.loader}{pack.optifine ? " + OptiFine" : ""}{pack.mods.length ? ` · ${pack.mods.length} 个 Mod` : ""}</span>
+          </div>
+          <ArrowLeftRight size={16} />
+        </button>
+      {:else}
+        <button class="pack-card empty" onclick={() => nav.go("download")}>
+          <span class="empty-ic"><Download size={18} /></span>
+          <div class="pc-text">
+            <b>{library.loaded ? "还没有安装版本" : "正在读取版本…"}</b>
+            <span>{installs.running ? `正在安装 ${installs.running} 个版本` : "点这里去下载游戏"}</span>
+          </div>
+        </button>
+      {/if}
 
-      {#if pickerOpen}
+      {#if pickerOpen && pack}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div class="picker" transition:fly={{ y: -6, duration: 160 }} onclick={(e) => e.stopPropagation()}>
           {#each library.packs as p (p.id)}
@@ -122,10 +141,12 @@
       class="start"
       class:preparing={game.status === "preparing"}
       class:running={game.status === "running"}
-      onclick={() => game.toggle()}
+      onclick={onStart}
     >
       <span class="start-icon">
-        {#if game.status === "idle"}
+        {#if game.status === "idle" && !pack}
+          <Download size={22} />
+        {:else if game.status === "idle"}
           <Play size={22} fill="currentColor" />
         {:else}
           <Square size={16} fill="currentColor" />
@@ -133,7 +154,10 @@
       </span>
       <span class="start-wm" aria-hidden="true"><Pickaxe size={190} strokeWidth={1.4} /></span>
       <div class="start-text">
-        {#if game.status === "idle"}
+        {#if game.status === "idle" && !pack}
+          <b>下载游戏</b>
+          <span>先装一个版本，装好就能开始</span>
+        {:else if game.status === "idle"}
           <b>开始游戏</b>
           <span>以 {account.name} 的身份进入 · 按 Enter 启动</span>
         {:else if game.status === "preparing"}
@@ -153,7 +177,7 @@
       i={0}
       icon={Layers}
       title="版本管理"
-      sub="已安装 {library.packs.length} 个版本"
+      sub={library.packs.length ? `已安装 ${library.packs.length} 个版本` : "还没有版本"}
       class="c2"
       onclick={() => nav.go("versions")}
     />
@@ -166,7 +190,13 @@
         </div>
       </div>
     </Tile>
-    <Tile i={2} icon={Download} title="下载游戏" sub="最新 {latest.id}" onclick={() => nav.go("download")} />
+    <Tile
+      i={2}
+      icon={Download}
+      title="下载游戏"
+      sub={installs.running ? `正在安装 ${installs.running} 个` : latest ? `最新 ${latest}` : "原版 · 加载器 · OptiFine"}
+      onclick={() => nav.go("download")}
+    />
     <Tile i={3} icon={Puzzle} title="Mod" sub="Mod · 光影 · 材质包" onclick={() => nav.go("resources")} />
     <Tile
       i={4}
@@ -245,6 +275,26 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+  }
+  .pc-text b,
+  .pc-text span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pack-card.empty {
+    border-style: dashed;
+  }
+  .empty-ic {
+    width: 40px;
+    height: 40px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--red-soft);
+    color: var(--red);
+    flex-shrink: 0;
   }
   .pc-text b {
     color: var(--text);

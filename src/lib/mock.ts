@@ -1,4 +1,5 @@
 // 演示用假数据：界面预览阶段使用，接入后端后替换为真实数据源。
+import type { VersionSettings } from "./api";
 
 export type PackIcon = "sword" | "cube" | "leaf";
 export type Loader = "Fabric" | "Forge" | "NeoForge" | "Quilt" | "原版";
@@ -17,12 +18,42 @@ export interface Pack {
   name: string;
   mc: string;
   loader: Loader;
+  loaderVersion?: string | null;
+  optifine?: string | null;
   color: string;
   icon: PackIcon;
   lastPlayed: string;
+  /** Mod 列表；真实版本里 id 是文件名 */
   mods: ModEntry[];
+  /** 真实版本里是文件名，演示数据里是市场 id */
   shaders: string[];
   resourcepacks: string[];
+  /** 以下只有真实安装的版本才有 */
+  real?: boolean;
+  dir?: string;
+  modified?: number;
+  /** 是否已经读取过版本文件夹里的 Mod/光影/材质包 */
+  filesLoaded?: boolean;
+  /** 版本隔离（Mod 放在版本文件夹里） */
+  isolated?: boolean;
+  /** 版本独立设置；undefined = 还没读取 */
+  vs?: VersionSettings;
+}
+
+/** 按加载器给版本挑颜色和图标 */
+export function packLook(loader: string | null | undefined, optifine?: string | null): Pick<Pack, "color" | "icon"> {
+  switch (loader) {
+    case "Fabric":
+      return { color: "#C98A2B", icon: "cube" };
+    case "Quilt":
+      return { color: "#7F77DD", icon: "cube" };
+    case "Forge":
+      return { color: "#378ADD", icon: "sword" };
+    case "NeoForge":
+      return { color: "#D85A30", icon: "sword" };
+    default:
+      return optifine ? { color: "#E24B4A", icon: "leaf" } : { color: "#639922", icon: "leaf" };
+  }
 }
 
 export const mockPacks: Pack[] = [
