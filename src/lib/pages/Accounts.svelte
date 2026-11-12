@@ -2,9 +2,20 @@
   import { slide } from "svelte/transition";
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Trash2, UserPlus, Info, Globe, KeyRound, Copy, ExternalLink, LoaderCircle, ChevronDown } from "@lucide/svelte";
-  import PixelAvatar from "$lib/components/PixelAvatar.svelte";
-  import { accounts, toast, settings, isTauri, ACCOUNT_LABELS, type AccountType } from "$lib/state.svelte";
+  import { Trash2, UserPlus, Info, Globe, KeyRound, Copy, ExternalLink, LoaderCircle, ChevronDown, Upload, Shirt } from "@lucide/svelte";
+  import Avatar from "$lib/components/Avatar.svelte";
+  import {
+    accounts,
+    skins,
+    toast,
+    settings,
+    isTauri,
+    readSkinFile,
+    ACCOUNT_LABELS,
+    type Account,
+    type AccountType,
+    type SkinChoice,
+  } from "$lib/state.svelte";
   import { api, type DeviceCode } from "$lib/api";
 
   let addType = $state<AccountType>("offline");
@@ -95,6 +106,34 @@
     api.msLoginCancel();
   }
 
+  /* ---------- 皮肤 ---------- */
+  let skinFor = $state<string | null>(null);
+  let fileInput = $state<HTMLInputElement>();
+  let uploadFor = "";
+
+  function pickFile(id: string) {
+    uploadFor = id;
+    fileInput?.click();
+  }
+
+  async function onFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || !uploadFor) return;
+    try {
+      accounts.setSkin(uploadFor, "custom", await readSkinFile(file));
+      toast.show("已换上自定义皮肤");
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function choose(a: Account, c: SkinChoice) {
+    if (c === "custom" && !a.skinData) return pickFile(a.id);
+    accounts.setSkin(a.id, c);
+  }
+
   function askRemove(id: string) {
     if (confirmId === id) {
       const name = accounts.list.find((a) => a.id === id)?.name;
@@ -108,6 +147,8 @@
     confirmTimer = setTimeout(() => (confirmId = null), 3000);
   }
 </script>
+
+<input bind:this={fileInput} type="file" accept="image/png" hidden onchange={onFile} />
 
 <div class="page-scroll">
   <div class="wrap">
@@ -124,8 +165,24 @@
         <ul class="list">
           {#each accounts.list as a (a.id)}
             {@const isCur = a.id === accounts.currentId}
+            {@const open = skinFor === a.id}
             <li class:on={isCur} transition:slide={{ duration: 200 }}>
-              <PixelAvatar name={a.name} size={40} />
+             <div class="row">
+              {#if a.type === "microsoft"}
+                <span class="av" title="正版皮肤，在 minecraft.net 上更换后这里会跟着变"><Avatar account={a} size={40} /></span>
+              {:else}
+                <button
+                  class="av edit"
+                  class:open
+                  title="换皮肤"
+                  aria-label="给 {a.name} 换皮肤"
+                  aria-expanded={open}
+                  onclick={() => (skinFor = open ? null : a.id)}
+                >
+                  <Avatar account={a} size={40} />
+                  <span class="av-badge"><Shirt size={11} /></span>
+                </button>
+              {/if}
               <div class="a-text">
                 <b>{a.name}</b>
                 <span class:pro={a.type === "microsoft"}>{a.type === "microsoft" ? "正版账户" : ACCOUNT_LABELS[a.type]}</span>
@@ -146,6 +203,35 @@
               >
                 {#if confirmId === a.id}确认删除{:else}<Trash2 size={14} />{/if}
               </button>
+             </div>
+              {#if open}
+                {@const cur = a.skin ?? "steve"}
+                <div class="skins" transition:slide={{ duration: 180 }}>
+                  <div class="sk-row">
+                    <button class="sk" class:on={cur === "steve"} onclick={() => choose(a, "steve")}>
+                      <Avatar src={skins.steve} name="Steve" size={34} /><span>Steve</span>
+                    </button>
+                    <button class="sk" class:on={cur === "alex"} onclick={() => choose(a, "alex")}>
+                      <Avatar src={skins.alex} name="Alex" size={34} /><span>Alex</span>
+                    </button>
+                    <button class="sk" class:on={cur === "custom"} onclick={() => choose(a, "custom")} title={a.skinData ? "" : "选择一张皮肤图片"}>
+                      {#if a.skinData}
+                        <Avatar src={a.skinData} name={a.name} size={34} />
+                      {:else}
+                        <span class="sk-empty"><Upload size={15} /></span>
+                      {/if}
+                      <span>自定义</span>
+                    </button>
+                    {#if a.skinData}
+                      <button class="link up" onclick={() => pickFile(a.id)}><Upload size={12} />换一张</button>
+                    {/if}
+                  </div>
+                  <p class="faint">
+                    {#if !skins.steve}装好任意一个游戏版本后，这里会显示游戏自带的 Steve 和 Alex。{/if}
+                    离线皮肤只显示在启动器里，进游戏后还是默认皮肤。
+                  </p>
+                </div>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -279,9 +365,6 @@
     gap: 4px;
   }
   .list li {
-    display: flex;
-    align-items: center;
-    gap: 12px;
     padding: 8px 10px;
     border-radius: var(--r);
     border: 1px solid transparent;
@@ -293,6 +376,93 @@
   .list li.on {
     border-color: var(--red);
     background: var(--red-soft);
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .av {
+    position: relative;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 6px;
+  }
+  .av.edit {
+    transition: transform 0.15s var(--ease);
+  }
+  .av.edit:hover {
+    transform: scale(1.06);
+  }
+  .av-badge {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text-2);
+    box-shadow: 0 0 0 1px var(--border);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .av.edit:hover .av-badge,
+  .av.edit.open .av-badge,
+  .av.edit:focus-visible .av-badge {
+    opacity: 1;
+  }
+  .av.open .av-badge {
+    color: var(--red);
+  }
+  .skins {
+    padding: 10px 0 2px 52px;
+  }
+  .sk-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sk {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px 5px;
+    min-width: 58px;
+    border-radius: var(--r);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 11.5px;
+    color: var(--text-2);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .sk:hover {
+    border-color: var(--text-3, var(--text-2));
+  }
+  .sk.on {
+    border-color: var(--red);
+    color: var(--red);
+    font-weight: 600;
+  }
+  .sk-empty {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 5px;
+    border: 1px dashed var(--border);
+    color: var(--text-2);
+  }
+  .up {
+    margin-left: 4px;
+  }
+  .skins .faint {
+    margin-top: 6px;
+    font-size: 11.5px;
   }
   .a-text {
     flex: 1;

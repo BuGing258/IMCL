@@ -135,6 +135,71 @@ export interface Account {
   type: AccountType;
   /** 正版账户的 UUID */
   uuid?: string;
+  /** 离线账户选的皮肤，默认 Steve */
+  skin?: SkinChoice;
+  /** 自定义皮肤，或者正版账户的皮肤（data URL） */
+  skinData?: string;
+}
+
+/* ---------- 皮肤 ---------- */
+export type SkinChoice = "steve" | "alex" | "custom";
+
+class Skins {
+  /** 游戏自带的皮肤（从装好的客户端里取，没装过游戏时为 null） */
+  steve = $state<string | null>(null);
+  alex = $state<string | null>(null);
+  #loading = false;
+
+  async loadDefaults() {
+    if (this.steve || this.#loading) return;
+    this.#loading = true;
+    try {
+      const r = await api.defaultSkins([settings.gameDir, ...settings.gameDirs.map((d) => d.path)].filter(Boolean));
+      if (r) Object.assign(this, r);
+    } catch {
+      /* 取不到就先用像素头像 */
+    } finally {
+      this.#loading = false;
+    }
+  }
+
+  /** 账户头像用的皮肤；返回 null 时用像素头像代替 */
+  of(a: Account): string | null {
+    if (a.type === "microsoft") return a.skinData ?? this.steve;
+    if (a.skin === "custom" && a.skinData) return a.skinData;
+    return a.skin === "alex" ? this.alex : this.steve;
+  }
+
+  /** 重新读取正版账户的皮肤（在官网换了皮肤也能跟上） */
+  async refreshMs(a: Account) {
+    const url = await api.msSkin(a.id).catch(() => null);
+    const cur = accounts.list.find((x) => x.id === a.id);
+    if (url && cur) cur.skinData = url;
+  }
+}
+export const skins = new Skins();
+
+/** 读取用户选的皮肤文件，检查尺寸，返回 data URL */
+export function readSkinFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (file.size > 512 * 1024) return reject(new Error("皮肤文件太大了，正常的皮肤只有几 KB"));
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error("读取文件失败"));
+    fr.onload = () => {
+      const url = String(fr.result);
+      if (!url.startsWith("data:image/png")) return reject(new Error("皮肤要是 PNG 图片"));
+      const img = new Image();
+      img.onerror = () => reject(new Error("这张图片打不开"));
+      img.onload = () => {
+        const { width: w, height: h } = img;
+        if (w < 64 || w % 64 || (h !== w && h * 2 !== w))
+          return reject(new Error(`尺寸不对（${w}×${h}），皮肤应该是 64×64 或 64×32`));
+        resolve(url);
+      };
+      img.src = url;
+    };
+    fr.readAsDataURL(file);
+  });
 }
 
 class Accounts {
@@ -154,6 +219,13 @@ class Accounts {
     if (this.list.some((a) => a.type === "offline" && a.name.toLowerCase() === n.toLowerCase()))
       return "已经有同名的离线账户了";
     return "";
+  }
+
+  setSkin(id: string, skin: SkinChoice, data?: string) {
+    const a = this.list.find((x) => x.id === id);
+    if (!a || a.type === "microsoft") return;
+    a.skin = skin;
+    if (data) a.skinData = data;
   }
 
   addOffline(name: string) {
@@ -177,6 +249,7 @@ class Accounts {
     if (old) old.name = info.name;
     else this.list.push({ id: info.id, name: info.name, type: "microsoft", uuid: info.uuid });
     this.currentId = info.id;
+    skins.refreshMs({ id: info.id, name: info.name, type: "microsoft" });
   }
 
   /** 启动时和后端保存的正版账户对一下：登录信息丢了的就去掉 */
@@ -190,6 +263,7 @@ class Accounts {
       this.list = keep;
       if (!keep.some((a) => a.id === this.currentId)) this.currentId = keep[0].id;
     }
+    for (const a of this.list) if (a.type === "microsoft") skins.refreshMs(a);
   }
 
   persist() {
@@ -252,6 +326,8 @@ class Library {
       });
       this.error = "";
       if (!this.packs.some((p) => p.id === this.currentId)) this.currentId = this.packs[0]?.id ?? "";
+      // 刚装好第一个版本时，默认皮肤就能取到了
+      if (this.packs.length) skins.loadDefaults();
     } catch (e) {
       this.error = String(e);
     } finally {
@@ -595,6 +671,7 @@ export async function initBackend() {
   javas.load();
   accounts.syncMicrosoft();
   await gameDirs.init();
+  skins.loadDefaults();
   await library.refresh();
 }
 

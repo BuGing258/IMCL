@@ -7,7 +7,7 @@ pub mod meta;
 
 mod forge;
 mod optifine;
-mod zipx;
+pub mod zipx;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;

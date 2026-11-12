@@ -5,6 +5,7 @@ pub mod java;
 pub mod maven;
 pub mod modrinth;
 pub mod net;
+pub mod skin;
 mod sysmon;
 pub mod task;
 
@@ -45,6 +46,8 @@ pub fn run() {
             commands::ms_login_cancel,
             commands::ms_accounts,
             commands::ms_remove,
+            commands::default_skins,
+            commands::ms_skin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -263,6 +263,11 @@ export const api = {
   msLoginCancel: (): Promise<void> => invoke("ms_login_cancel"),
   msAccounts: (): Promise<MsAccountInfo[]> => (isTauri() ? invoke("ms_accounts") : Promise.resolve([])),
   msRemove: (id: string): Promise<void> => (isTauri() ? invoke("ms_remove", { id }) : Promise.resolve()),
+  /** 游戏自带的 Steve / Alex 皮肤（data URL），从已安装的客户端里取；一个都没装时为 null */
+  defaultSkins: (dirs: string[]): Promise<{ steve: string; alex: string } | null> =>
+    isTauri() ? invoke("default_skins", { dirs }) : Promise.resolve(null),
+  /** 正版账户当前的皮肤（data URL） */
+  msSkin: (id: string): Promise<string | null> => (isTauri() ? invoke("ms_skin", { id }) : Promise.resolve(null)),
 
   probeJava: async (path: string): Promise<JavaInfo> => {
     if (isTauri()) return invoke("probe_java", { path });

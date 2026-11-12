@@ -9,6 +9,7 @@ use tauri::{AppHandle, State};
 use crate::auth;
 use crate::game::{self, installed, launch, meta};
 use crate::modrinth;
+use crate::skin;
 use crate::java::{self, JavaInfo};
 use crate::net::Source;
 use crate::task::TaskCtx;
@@ -124,6 +125,21 @@ pub async fn modrinth_install(req: modrinth::InstallReq) -> CmdResult<modrinth::
 #[tauri::command]
 pub async fn modrinth_identify(game_dir: String, name: String) -> CmdResult<HashMap<String, modrinth::FileInfo>> {
     modrinth::identify(&PathBuf::from(game_dir), &name).await.map_err(err)
+}
+
+/* ---------- 皮肤 ---------- */
+
+/// 游戏自带的 Steve / Alex 皮肤，从这些游戏目录里装好的客户端取（取到一次就缓存）
+#[tauri::command]
+pub async fn default_skins(app: AppHandle, dirs: Vec<String>) -> CmdResult<Option<skin::DefaultSkins>> {
+    let dirs: Vec<PathBuf> = dirs.into_iter().map(PathBuf::from).collect();
+    tauri::async_runtime::spawn_blocking(move || skin::defaults(&app, &dirs)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
+/// 正版账户当前的皮肤（data URL）
+#[tauri::command]
+pub async fn ms_skin(app: AppHandle, id: String) -> CmdResult<Option<String>> {
+    skin::ms_skin(&app, &id).await.map_err(err)
 }
 
 /* ---------- 微软账户 ---------- */

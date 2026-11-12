@@ -31,6 +31,9 @@ pub struct MsAccount {
     pub access_token: String,
     /// Minecraft 令牌过期时间（unix 秒）
     pub expires_at: u64,
+    /// 当前使用的皮肤地址
+    #[serde(default)]
+    pub skin_url: Option<String>,
 }
 
 /// 给前端看的部分（不含令牌）
@@ -190,6 +193,7 @@ async fn finish(client_id: &str, refresh_token: &str, ms_token: &str) -> Result<
     let profile: Value = r.error_for_status().context("读取 Minecraft 角色失败")?.json().await?;
     let uuid = profile["id"].as_str().ok_or_else(|| anyhow!("读取 Minecraft 角色失败"))?.to_string();
     let name = profile["name"].as_str().unwrap_or("Player").to_string();
+    let skin_url = active_skin(&profile);
 
     Ok(MsAccount {
         id: format!("ms-{uuid}"),
@@ -199,7 +203,37 @@ async fn finish(client_id: &str, refresh_token: &str, ms_token: &str) -> Result<
         refresh_token: refresh_token.to_string(),
         access_token: mc_token.to_string(),
         expires_at: now() + expires_in,
+        skin_url,
     })
+}
+
+/// 角色信息里正在使用的皮肤
+fn active_skin(profile: &Value) -> Option<String> {
+    let skins = profile["skins"].as_array()?;
+    skins
+        .iter()
+        .find(|s| s["state"].as_str() == Some("ACTIVE"))
+        .or_else(|| skins.first())
+        .and_then(|s| s["url"].as_str())
+        .map(str::to_string)
+}
+
+/// 登录还有效时重新读一次角色，更新名字和皮肤；返回皮肤地址（读不到就用上次的）
+pub async fn refresh_skin(app: &AppHandle, id: &str) -> Result<Option<String>> {
+    let Some(mut acc) = load_all(app).into_iter().find(|a| a.id == id) else {
+        bail!("找不到这个微软账户的登录信息");
+    };
+    if acc.expires_at > now() + 60 {
+        let r = net::client().get(MC_PROFILE).bearer_auth(&acc.access_token).timeout(Duration::from_secs(15)).send().await;
+        if let Ok(profile) = async { r?.error_for_status()?.json::<Value>().await }.await {
+            if let Some(n) = profile["name"].as_str() {
+                acc.name = n.to_string();
+            }
+            acc.skin_url = active_skin(&profile);
+            upsert(app, &acc)?;
+        }
+    }
+    Ok(acc.skin_url)
 }
 
 /* ---------------- 对外 ---------------- */

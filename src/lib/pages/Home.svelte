@@ -16,7 +16,7 @@
   } from "@lucide/svelte";
   import Tile from "$lib/components/Tile.svelte";
   import PackCover from "$lib/components/PackCover.svelte";
-  import PixelAvatar from "$lib/components/PixelAvatar.svelte";
+  import Avatar from "$lib/components/Avatar.svelte";
   import { nav, library, game, settings, accounts, sysmon, installs, ACCOUNT_LABELS, fmtTime } from "$lib/state.svelte";
   import { api } from "$lib/api";
 
@@ -258,7 +258,7 @@
     />
     <Tile i={1} icon={UserRound} title="账户管理" sub="共 {accounts.list.length} 个账户" class="r2" onclick={() => nav.go("accounts")}>
       <div class="acc">
-        <PixelAvatar name={account.name} size={48} />
+        <Avatar {account} size={48} />
         <div class="acc-text">
           <b>{account.name}</b>
           <span>{ACCOUNT_LABELS[account.type]}</span>
