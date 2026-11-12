@@ -168,21 +168,9 @@
             {@const open = skinFor === a.id}
             <li class:on={isCur} transition:slide={{ duration: 200 }}>
              <div class="row">
-              {#if a.type === "microsoft"}
-                <span class="av" title="正版皮肤，在 minecraft.net 上更换后这里会跟着变"><Avatar account={a} size={40} /></span>
-              {:else}
-                <button
-                  class="av edit"
-                  class:open
-                  title="换皮肤"
-                  aria-label="给 {a.name} 换皮肤"
-                  aria-expanded={open}
-                  onclick={() => (skinFor = open ? null : a.id)}
-                >
-                  <Avatar account={a} size={40} />
-                  <span class="av-badge"><Shirt size={11} /></span>
-                </button>
-              {/if}
+              <span class="av" title={a.type === "microsoft" ? "正版皮肤，在 minecraft.net 上更换后这里会跟着变" : undefined}>
+                <Avatar account={a} size={40} />
+              </span>
               <div class="a-text">
                 <b>{a.name}</b>
                 <span class:pro={a.type === "microsoft"}>{a.type === "microsoft" ? "正版账户" : ACCOUNT_LABELS[a.type]}</span>
@@ -191,6 +179,11 @@
                 <span class="badge red">使用中</span>
               {:else}
                 <button class="btn btn-sm" onclick={() => (accounts.currentId = a.id)}>使用</button>
+              {/if}
+              {#if a.type !== "microsoft"}
+                <button class="btn btn-sm skin-btn" class:open aria-expanded={open} onclick={() => (skinFor = open ? null : a.id)}>
+                  <Shirt size={14} />皮肤
+                </button>
               {/if}
               <button
                 class="btn btn-sm del"
@@ -388,33 +381,8 @@
     flex-shrink: 0;
     border-radius: 6px;
   }
-  .av.edit {
-    transition: transform 0.15s var(--ease);
-  }
-  .av.edit:hover {
-    transform: scale(1.06);
-  }
-  .av-badge {
-    position: absolute;
-    right: -4px;
-    bottom: -4px;
-    width: 18px;
-    height: 18px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    background: var(--surface);
-    color: var(--text-2);
-    box-shadow: 0 0 0 1px var(--border);
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-  .av.edit:hover .av-badge,
-  .av.edit.open .av-badge,
-  .av.edit:focus-visible .av-badge {
-    opacity: 1;
-  }
-  .av.open .av-badge {
+  .skin-btn.open {
+    border-color: var(--red);
     color: var(--red);
   }
   .skins {

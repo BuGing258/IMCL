@@ -2,9 +2,10 @@
   import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw } from "@lucide/svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
+  import ResVersionPicker from "$lib/components/ResVersionPicker.svelte";
   import { library, toast, ui, nav, fmtCount, isTauri, settings } from "$lib/state.svelte";
   import { RES_LABELS, type ResKind } from "$lib/mock";
-  import { api, type Hit } from "$lib/api";
+  import { api, type Hit, type ModVersion } from "$lib/api";
 
   const KINDS: { k: ResKind; icon: typeof Puzzle }[] = [
     { k: "mod", icon: Puzzle },
@@ -93,8 +94,10 @@
   let loading = $state(false);
   let loadErr = $state("");
   let installing = $state<Record<string, boolean>>({});
-  /** 刚装上的（识别结果回来之前先当作已安装） */
-  let justInstalled = $state<Record<string, boolean>>({});
+  /** 刚装上的（识别结果回来之前先当作已安装），值是版本号 */
+  let justInstalled = $state<Record<string, string>>({});
+  /** 正在选版本的资源 */
+  let picking = $state<Hit | null>(null);
 
   const pack = $derived(library.current);
   const isMod = $derived(ui.resKind === "mod");
@@ -112,7 +115,7 @@
 
   const installedIds = $derived(new Set(Object.values(pack?.projects ?? {}).map((p) => p.projectId)));
   function has(h: Hit) {
-    if (justInstalled[`${pack?.id}:${h.id}`]) return true;
+    if (justInstalled[`${pack?.id}:${h.id}`] != null) return true;
     if (installedIds.has(h.id)) return true;
     // 浏览器预览的演示数据按名字判断
     if (pack && !pack.real) {
@@ -169,10 +172,28 @@
     hits = [];
   }
 
-  async function install(h: Hit) {
-    if (!pack || !canInstall || installing[h.id] || has(h)) return;
+  /** 已安装的版本号：空字符串 = 装了但不知道版本，null = 没装 */
+  function installedVersion(h: Hit): string | null {
+    if (!has(h)) return null;
+    const just = justInstalled[`${pack?.id}:${h.id}`];
+    if (just) return just;
+    const f = Object.values(pack?.projects ?? {}).find((p) => p.projectId === h.id);
+    return f?.versionNumber ?? "";
+  }
+
+  const apiLoader = (kind: ResKind) => (kind === "mod" ? (pack?.loader ?? null) : loaderFilter);
+
+  function openPicker(h: Hit) {
+    if (!pack || !canInstall || installing[h.id]) return;
+    picking = h;
+  }
+
+  async function install(h: Hit, v: ModVersion) {
+    picking = null;
+    if (!pack || !canInstall || installing[h.id]) return;
     const target = pack;
     const kind = ui.resKind;
+    const reinstall = has(h);
     installing[h.id] = true;
     try {
       const r = await api.installResource({
@@ -181,16 +202,20 @@
         kind,
         projectId: h.id,
         mc: target.mc,
-        loader: kind === "mod" ? target.loader : loaderFilter,
+        loader: apiLoader(kind),
+        versionId: v.id,
+        reinstall,
       });
-      justInstalled[`${target.id}:${h.id}`] = true;
-      let msg = `已把 ${h.title} 装进 ${target.name}`;
+      justInstalled[`${target.id}:${h.id}`] = r.versionNumber;
+      let msg = reinstall ? `已把 ${h.title} 重新安装为 ${r.versionNumber}` : `已把 ${h.title} ${r.versionNumber} 装进 ${target.name}`;
       if (r.deps.length) msg += `，并装上前置 ${r.deps.join("、")}`;
       toast.show(msg);
       if (r.missing.length) setTimeout(() => toast.show(`有前置没找到适合的版本：${r.missing.join("、")}`), 2000);
       if (target.real) await library.loadFiles(target, true);
-      else if (kind === "mod") target.mods.push({ id: h.slug, name: h.title, version: "最新", size: "—", enabled: true });
-      else (kind === "shader" ? target.shaders : target.resourcepacks).push(h.slug);
+      else if (!reinstall) {
+        if (kind === "mod") target.mods.push({ id: h.slug, name: h.title, version: r.versionNumber, size: "—", enabled: true });
+        else (kind === "shader" ? target.shaders : target.resourcepacks).push(h.slug);
+      }
     } catch (e) {
       toast.show(`安装失败：${e}`);
     } finally {
@@ -211,6 +236,20 @@
 
   const hex = (c: number | null) => (c == null ? "#888780" : `#${c.toString(16).padStart(6, "0")}`);
 </script>
+
+{#if picking && pack}
+  {@const h = picking}
+  <ResVersionPicker
+    hit={h}
+    kind={ui.resKind}
+    mc={pack.mc}
+    loader={apiLoader(ui.resKind)}
+    target={pack.name}
+    installedVersion={installedVersion(h)}
+    onclose={() => (picking = null)}
+    onpick={(v) => install(h, v)}
+  />
+{/if}
 
 <div class="page-scroll">
   <div class="wrap">
@@ -318,6 +357,10 @@
               </div>
               <p class="desc" title={h.description}>{h.description}</p>
               <div class="mt-meta">
+                {#if installed}
+                  {@const iv = installedVersion(h)}
+                  <span class="badge green inst" title={iv ? `已安装 ${iv}` : "已安装"}><Check size={11} /><span class="iv">已安装{iv ? ` ${iv}` : ""}</span></span>
+                {/if}
                 {#each h.categories.filter((c) => CAT_ZH[c]).slice(0, 2) as c}
                   <span class="badge gray">{CAT_ZH[c]}</span>
                 {/each}
@@ -325,12 +368,12 @@
               </div>
             </div>
             <div class="ma">
-              {#if installed}
-                <span class="badge green"><Check size={12} />已安装</span>
-              {:else if installing[h.id]}
+              {#if installing[h.id]}
                 <button class="btn btn-sm" disabled><LoaderCircle size={14} class="spin" />安装中</button>
+              {:else if installed}
+                <button class="btn btn-sm" disabled={!canInstall} onclick={() => openPicker(h)} title="换个版本或重新下载">重新安装</button>
               {:else}
-                <button class="btn btn-sm" disabled={!canInstall} onclick={() => install(h)}>安装</button>
+                <button class="btn btn-sm" disabled={!canInstall} onclick={() => openPicker(h)}>安装</button>
               {/if}
             </div>
           </div>
@@ -526,14 +569,27 @@
     gap: 6px;
     margin-top: 4px;
     font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
   }
   .dl {
+    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 3px;
   }
   .ma {
     flex-shrink: 0;
+  }
+  .mt-meta .badge {
+    flex-shrink: 0;
+  }
+  .inst {
+    max-width: 160px;
+  }
+  .iv {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .none {
     grid-column: 1 / -1;

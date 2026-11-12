@@ -61,6 +61,14 @@
     if (e.altKey && e.key === "ArrowLeft") nav.back();
   }
 
+  // 去掉浏览器自带的右键菜单（刷新、检查之类的）；输入框和选中的文字保留，方便复制粘贴
+  function onContextMenu(e: MouseEvent) {
+    const t = e.target as HTMLElement | null;
+    const editable = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    const selected = !!window.getSelection()?.toString();
+    if (!editable && !selected) e.preventDefault();
+  }
+
   // 鼠标侧键“后退”
   function onMouseUp(e: MouseEvent) {
     if (e.button === 3) {
@@ -84,7 +92,7 @@
       : { x: "100%", opacity: 1, duration: 460, easing: cubicOut };
 </script>
 
-<svelte:window onkeydown={onKey} onmouseup={onMouseUp} />
+<svelte:window onkeydown={onKey} onmouseup={onMouseUp} oncontextmenu={onContextMenu} />
 
 <div class="app">
   <TitleBar />

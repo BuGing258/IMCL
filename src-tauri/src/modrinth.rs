@@ -263,6 +263,12 @@ pub struct InstallReq {
     pub mc: String,
     /// Mod：版本的加载器；光影：iris / optifine；材质包：空
     pub loader: Option<String>,
+    /// 指定装哪个版本；不填就挑最新的正式版
+    #[serde(default)]
+    pub version_id: Option<String>,
+    /// 已经装了也重新装（替换旧文件）
+    #[serde(default)]
+    pub reinstall: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,19 +276,83 @@ pub struct InstallReq {
 pub struct InstallResult {
     pub title: String,
     pub file: String,
+    pub version_number: String,
+    /// 被替换掉（移到回收站）的旧文件
+    pub replaced: Vec<String>,
     /// 一起装上的前置
     pub deps: Vec<String>,
     /// 找不到合适版本的前置
     pub missing: Vec<String>,
 }
 
-/// 挑一个适合这个游戏版本和加载器的版本：优先正式版
-async fn pick_version(project: &str, mc: &str, loaders: &[String]) -> Result<Option<Value>> {
+/// 这个项目适合这个游戏版本和加载器的全部版本（新的在前）
+async fn list_versions(project: &str, mc: &str, loaders: &[String]) -> Result<Vec<Value>> {
     let mut q = vec![("game_versions", json!([mc]).to_string())];
     if !loaders.is_empty() {
         q.push(("loaders", json!(loaders).to_string()));
     }
-    let list: Vec<Value> = get(&format!("/project/{project}/version"), &q).await?;
+    get(&format!("/project/{project}/version"), &q).await
+}
+
+/// 按资源类型决定用哪些加载器过滤
+fn loaders_for(kind: &str, loader: Option<&str>) -> Result<Vec<String>> {
+    Ok(match (kind, loader) {
+        ("mod", Some(l)) => mod_loaders(l),
+        ("mod", None) => bail!("原版不能装 Mod"),
+        ("shader", Some(l)) if !l.is_empty() => vec![l.to_lowercase()],
+        ("resourcepack", _) => vec!["minecraft".into()],
+        _ => vec![],
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionsReq {
+    pub project_id: String,
+    pub kind: String,
+    pub mc: String,
+    pub loader: Option<String>,
+}
+
+/// 给用户挑的一个版本
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModVersion {
+    pub id: String,
+    pub name: String,
+    pub version_number: String,
+    /// release / beta / alpha
+    pub version_type: String,
+    pub published: String,
+    pub downloads: u64,
+    pub file: String,
+    pub size: u64,
+}
+
+pub async fn versions(req: &VersionsReq) -> Result<Vec<ModVersion>> {
+    let loaders = loaders_for(&req.kind, req.loader.as_deref())?;
+    let list = list_versions(&req.project_id, &req.mc, &loaders).await?;
+    Ok(list
+        .iter()
+        .filter_map(|v| {
+            let f = primary_file(v)?;
+            Some(ModVersion {
+                id: v["id"].as_str()?.to_string(),
+                name: v["name"].as_str().unwrap_or_default().to_string(),
+                version_number: v["version_number"].as_str().unwrap_or_default().to_string(),
+                version_type: v["version_type"].as_str().unwrap_or("release").to_string(),
+                published: v["date_published"].as_str().unwrap_or_default().to_string(),
+                downloads: v["downloads"].as_u64().unwrap_or(0),
+                file: f["filename"].as_str().unwrap_or_default().to_string(),
+                size: f["size"].as_u64().unwrap_or(0),
+            })
+        })
+        .collect())
+}
+
+/// 挑一个适合这个游戏版本和加载器的版本：优先正式版
+async fn pick_version(project: &str, mc: &str, loaders: &[String]) -> Result<Option<Value>> {
+    let list = list_versions(project, mc, loaders).await?;
     Ok(list
         .iter()
         .find(|v| v["version_type"] == "release")
@@ -313,29 +383,46 @@ pub async fn install(req: &InstallReq) -> Result<InstallResult> {
     let game_dir = PathBuf::from(&req.game_dir);
     let folder = kind_folder(&req.kind)?;
     let dir = installed::kind_dir(&game_dir, &req.version, folder)?;
-    let loaders = match (req.kind.as_str(), req.loader.as_deref()) {
-        ("mod", Some(l)) => mod_loaders(l),
-        ("mod", None) => bail!("原版不能装 Mod"),
-        ("shader", Some(l)) if !l.is_empty() => vec![l.to_lowercase()],
-        ("resourcepack", _) => vec!["minecraft".into()],
-        _ => vec![],
-    };
+    let loaders = loaders_for(&req.kind, req.loader.as_deref())?;
 
-    // 已经装了哪些项目（用来跳过已有的前置）
-    let installed_ids: HashSet<String> = identify(&game_dir, &req.version)
-        .await
-        .map(|m| m.into_values().map(|f| f.project_id).collect())
-        .unwrap_or_default();
-    if installed_ids.contains(&req.project_id) {
+    // 已经装了哪些项目（用来跳过已有的前置，以及重新安装时找旧文件）
+    let found = identify(&game_dir, &req.version).await.unwrap_or_default();
+    let prefix = format!("{folder}/");
+    let old_files: Vec<String> = found
+        .iter()
+        .filter(|(k, f)| f.project_id == req.project_id && k.starts_with(&prefix))
+        .map(|(k, _)| k[prefix.len()..].to_string())
+        .collect();
+    if !old_files.is_empty() && !req.reinstall {
         bail!("这个版本里已经装了");
     }
+    let installed_ids: HashSet<String> = found.into_values().map(|f| f.project_id).collect();
 
-    let root = pick_version(&req.project_id, &req.mc, &loaders)
-        .await?
-        .ok_or_else(|| anyhow!("没有适合 {} {} 的版本", req.mc, req.loader.clone().unwrap_or_default()))?;
+    let root = match &req.version_id {
+        Some(id) => {
+            let v: Value = get(&format!("/version/{id}"), &[]).await?;
+            if v["project_id"].as_str() != Some(req.project_id.as_str()) {
+                bail!("选的版本不属于这个项目");
+            }
+            v
+        }
+        None => pick_version(&req.project_id, &req.mc, &loaders)
+            .await?
+            .ok_or_else(|| anyhow!("没有适合 {} {} 的版本", req.mc, req.loader.clone().unwrap_or_default()))?,
+    };
     let title: String = get::<Value>(&format!("/project/{}", req.project_id), &[]).await?["title"].as_str().unwrap_or("").to_string();
+    let version_number = root["version_number"].as_str().unwrap_or_default().to_string();
     let f = primary_file(&root).ok_or_else(|| anyhow!("这个版本没有文件"))?;
     let file = download_file(f, &dir).await.context("下载失败")?;
+
+    // 新文件下好了再处理旧的：移到回收站（同名的就是刚下好的，不动）
+    let mut replaced = Vec::new();
+    for old in old_files.into_iter().filter(|o| *o != file) {
+        let p = dir.join(&old);
+        if trash::delete(&p).is_ok() || std::fs::remove_file(&p).is_ok() {
+            replaced.push(old);
+        }
+    }
 
     // 必需的前置，逐层往下找
     let mut deps = Vec::new();
@@ -378,7 +465,7 @@ pub async fn install(req: &InstallReq) -> Result<InstallResult> {
             }
         }
     }
-    Ok(InstallResult { title, file, deps, missing })
+    Ok(InstallResult { title, file, version_number, replaced, deps, missing })
 }
 
 #[cfg(test)]
@@ -430,31 +517,37 @@ mod tests {
         let vdir = root.join("versions").join("t");
         std::fs::create_dir_all(&vdir).unwrap();
         std::fs::write(vdir.join("amc.json"), "{}").unwrap();
-        let r = install(&InstallReq {
+        let req = |version_id: Option<String>, reinstall: bool| InstallReq {
             game_dir: root.to_string_lossy().into(),
             version: "t".into(),
             kind: "mod".into(),
             project_id: "YL57xq9U".into(), // Iris
             mc: "1.20.1".into(),
             loader: Some("Fabric".into()),
-        })
-        .await
-        .unwrap();
+            version_id,
+            reinstall,
+        };
+        let r = install(&req(None, false)).await.unwrap();
         println!("{r:?}");
         let ids = identify(&root, "t").await.unwrap();
-        println!("{ids:#?}");
         assert!(ids.values().any(|f| f.project_id == "YL57xq9U"));
         // 再装一次应该提示已安装
-        let again = install(&InstallReq {
-            game_dir: root.to_string_lossy().into(),
-            version: "t".into(),
-            kind: "mod".into(),
-            project_id: "YL57xq9U".into(),
-            mc: "1.20.1".into(),
-            loader: Some("Fabric".into()),
-        })
-        .await;
-        assert!(again.is_err());
+        assert!(install(&req(None, false)).await.is_err());
+
+        // 列出可选版本，换成一个旧版本重新安装
+        let list = versions(&VersionsReq { project_id: "YL57xq9U".into(), kind: "mod".into(), mc: "1.20.1".into(), loader: Some("Fabric".into()) })
+            .await
+            .unwrap();
+        println!("{} 个版本，前几个：{:?}", list.len(), list.iter().take(3).map(|v| (&v.version_number, &v.version_type)).collect::<Vec<_>>());
+        let old = list.iter().rev().find(|v| v.version_number != r.version_number).expect("至少要有两个版本");
+        let r2 = install(&req(Some(old.id.clone()), true)).await.unwrap();
+        println!("{r2:?}");
+        assert_eq!(r2.version_number, old.version_number);
+        assert_eq!(r2.replaced, vec![r.file.clone()]);
+        let ids = identify(&root, "t").await.unwrap();
+        let iris: Vec<_> = ids.values().filter(|f| f.project_id == "YL57xq9U").collect();
+        assert_eq!(iris.len(), 1, "旧文件应该被替换掉");
+        assert_eq!(iris[0].version_number, old.version_number);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

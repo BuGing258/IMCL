@@ -40,6 +40,7 @@ pub fn run() {
             commands::version_settings,
             commands::set_version_settings,
             commands::modrinth_search,
+            commands::modrinth_versions,
             commands::modrinth_install,
             commands::modrinth_identify,
             commands::ms_login,

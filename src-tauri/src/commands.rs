@@ -118,6 +118,11 @@ pub async fn modrinth_search(req: modrinth::SearchReq) -> CmdResult<modrinth::Se
 }
 
 #[tauri::command]
+pub async fn modrinth_versions(req: modrinth::VersionsReq) -> CmdResult<Vec<modrinth::ModVersion>> {
+    modrinth::versions(&req).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn modrinth_install(req: modrinth::InstallReq) -> CmdResult<modrinth::InstallResult> {
     modrinth::install(&req).await.map_err(err)
 }

@@ -122,13 +122,39 @@ export interface ResInstallReq {
   projectId: string;
   mc: string;
   loader: string | null;
+  /** 指定版本；不填就装最新的正式版 */
+  versionId?: string | null;
+  /** 已经装了也重新装（旧文件移到回收站） */
+  reinstall?: boolean;
 }
 
 export interface ResInstallResult {
   title: string;
   file: string;
+  versionNumber: string;
+  /** 被替换掉的旧文件 */
+  replaced: string[];
   deps: string[];
   missing: string[];
+}
+
+export interface ResVersionsReq {
+  projectId: string;
+  kind: ResKindApi;
+  mc: string;
+  loader: string | null;
+}
+
+/** 一个可以选的资源版本 */
+export interface ModVersion {
+  id: string;
+  name: string;
+  versionNumber: string;
+  versionType: "release" | "beta" | "alpha";
+  published: string;
+  downloads: number;
+  file: string;
+  size: number;
 }
 
 /** 已安装文件对应的 Modrinth 项目；键是 "mods/文件名" */
@@ -251,10 +277,33 @@ export const api = {
       }));
     return { hits: req.offset ? [] : hits, total: hits.length };
   },
+  /** 这个资源适合目标游戏版本的所有版本（新的在前） */
+  resourceVersions: async (req: ResVersionsReq): Promise<ModVersion[]> => {
+    if (isTauri()) return invoke("modrinth_versions", { req });
+    await sleep(400);
+    const types: ModVersion["versionType"][] = ["release", "release", "beta", "release", "alpha", "release"];
+    return types.map((t, i) => ({
+      id: `${req.projectId}-v${i}`,
+      name: `${req.projectId} ${3 - i * 0.1}`,
+      versionNumber: `${(3 - i * 0.1).toFixed(1)}.0+${req.mc}`,
+      versionType: t,
+      published: new Date(Date.now() - i * 26 * 86400_000).toISOString(),
+      downloads: Math.round(900_000 / (i + 1)),
+      file: `${req.projectId}-${i}.jar`,
+      size: 1_200_000 - i * 40_000,
+    }));
+  },
   installResource: async (req: ResInstallReq): Promise<ResInstallResult> => {
     if (isTauri()) return invoke("modrinth_install", { req });
     await sleep(700);
-    return { title: req.projectId, file: `${req.projectId}.jar`, deps: [], missing: [] };
+    return {
+      title: req.projectId,
+      file: `${req.projectId}.jar`,
+      versionNumber: req.versionId ?? "最新",
+      replaced: req.reinstall ? [`${req.projectId}-old.jar`] : [],
+      deps: [],
+      missing: [],
+    };
   },
   identify: (gameDir: string, name: string): Promise<Record<string, FileInfo>> =>
     isTauri() ? invoke("modrinth_identify", { gameDir, name }) : Promise.resolve({}),
