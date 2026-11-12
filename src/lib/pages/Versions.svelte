@@ -30,6 +30,10 @@
     shader: sel?.shaders.length ?? 0,
     resourcepack: sel?.resourcepacks.length ?? 0,
   });
+  /** 光影 / 材质包的显示名：Modrinth 上认得出来就用正式名字 */
+  function resName(kind: ResKind, id: string) {
+    return sel?.projects?.[`${dirName(kind)}/${id}`]?.title ?? marketName(id).replace(/\.zip$/i, "");
+  }
   const listKey = (k: ResKind) => (k === "shader" ? "shaders" : "resourcepacks") as "shaders" | "resourcepacks";
   const dirName = (k: ResKind) => (k === "mod" ? "mods" : k === "shader" ? "shaderpacks" : "resourcepacks");
 
@@ -113,7 +117,7 @@
     try {
       if (sel.real) await api.trashFile(settings.gameDir, sel.name, dirName(kind), id);
       sel[k] = sel[k].filter((x) => x !== id);
-      toast.show(sel.real ? `已把 ${marketName(id)} 移到回收站` : `已移除 ${marketName(id)}`);
+      toast.show(sel.real ? `已把 ${resName(kind, id)} 移到回收站` : `已移除 ${resName(kind, id)}`);
     } catch (e) {
       toast.show(String(e));
     }
@@ -283,12 +287,12 @@
                   {@const confirming = confirmKey === `${tab}:${id}`}
                   <div class="res">
                     <span class="res-ic">{#if tab === "shader"}<Sun size={16} />{:else}<Image size={16} />{/if}</span>
-                    <span class="name">{marketName(id)}</span>
+                    <span class="name" title={id}>{resName(tab as ResKind, id)}</span>
                     <button
                       class="btn btn-sm"
                       class:btn-icon={!confirming}
                       class:confirm={confirming}
-                      aria-label="移除 {marketName(id)}"
+                      aria-label="移除 {resName(tab as ResKind, id)}"
                       title={sel.real ? "移到回收站" : "移除"}
                       onclick={() => removeRes(tab as "shader" | "resourcepack", id)}
                     >

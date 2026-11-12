@@ -1,6 +1,6 @@
 // 后端接口封装。在 Tauri 窗口里调用 Rust；在普通浏览器里预览时返回假数据，保证界面能看。
 import { invoke } from "@tauri-apps/api/core";
-import { mockVersions } from "./mock";
+import { mockMarket, mockVersions } from "./mock";
 
 export const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -68,6 +68,8 @@ export interface LaunchRequest {
   player: string;
   source: Source;
   threads: number;
+  /** 微软账户 id；离线账户不填 */
+  msAccount?: string | null;
 }
 
 /** 游戏进程结束 */
@@ -81,6 +83,73 @@ export interface GameExit {
   tail: string[];
   /** 完整日志文件 */
   log: string;
+}
+
+/* ---------- Modrinth ---------- */
+export type ResKindApi = "mod" | "shader" | "resourcepack";
+
+export interface SearchReq {
+  kind: ResKindApi;
+  query: string;
+  mc?: string | null;
+  loader?: string | null;
+  category?: string | null;
+  sort: "relevance" | "downloads" | "updated";
+  offset: number;
+}
+
+export interface Hit {
+  id: string;
+  slug: string;
+  title: string;
+  author: string;
+  description: string;
+  downloads: number;
+  icon: string | null;
+  categories: string[];
+  color: number | null;
+}
+
+export interface SearchResult {
+  hits: Hit[];
+  total: number;
+}
+
+export interface ResInstallReq {
+  gameDir: string;
+  version: string;
+  kind: ResKindApi;
+  projectId: string;
+  mc: string;
+  loader: string | null;
+}
+
+export interface ResInstallResult {
+  title: string;
+  file: string;
+  deps: string[];
+  missing: string[];
+}
+
+/** 已安装文件对应的 Modrinth 项目；键是 "mods/文件名" */
+export interface FileInfo {
+  projectId: string;
+  title: string;
+  icon: string | null;
+  versionNumber: string;
+}
+
+/* ---------- 微软账户 ---------- */
+export interface MsAccountInfo {
+  id: string;
+  name: string;
+  uuid: string;
+}
+
+export interface DeviceCode {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
 }
 
 export interface GameDirInfo {
@@ -162,6 +231,38 @@ export const api = {
   /** 补全文件并启动，Java 进程起来后返回进程号 */
   launch: (req: LaunchRequest): Promise<number> => invoke("launch_game", { req }),
   stopGame: (): Promise<boolean> => invoke("stop_game"),
+
+  searchResources: async (req: SearchReq): Promise<SearchResult> => {
+    if (isTauri()) return invoke("modrinth_search", { req });
+    await sleep(250);
+    const q = req.query.toLowerCase();
+    const hits = mockMarket
+      .filter((m) => m.kind === req.kind && (!q || m.name.toLowerCase().includes(q) || m.id.includes(q)))
+      .map((m) => ({
+        id: m.id,
+        slug: m.id,
+        title: m.name,
+        author: m.author,
+        description: m.desc,
+        downloads: m.downloads,
+        icon: null,
+        categories: [],
+        color: parseInt(m.color.slice(1), 16),
+      }));
+    return { hits: req.offset ? [] : hits, total: hits.length };
+  },
+  installResource: async (req: ResInstallReq): Promise<ResInstallResult> => {
+    if (isTauri()) return invoke("modrinth_install", { req });
+    await sleep(700);
+    return { title: req.projectId, file: `${req.projectId}.jar`, deps: [], missing: [] };
+  },
+  identify: (gameDir: string, name: string): Promise<Record<string, FileInfo>> =>
+    isTauri() ? invoke("modrinth_identify", { gameDir, name }) : Promise.resolve({}),
+
+  msLogin: (clientId: string): Promise<MsAccountInfo> => invoke("ms_login", { clientId }),
+  msLoginCancel: (): Promise<void> => invoke("ms_login_cancel"),
+  msAccounts: (): Promise<MsAccountInfo[]> => (isTauri() ? invoke("ms_accounts") : Promise.resolve([])),
+  msRemove: (id: string): Promise<void> => (isTauri() ? invoke("ms_remove", { id }) : Promise.resolve()),
 
   probeJava: async (path: string): Promise<JavaInfo> => {
     if (isTauri()) return invoke("probe_java", { path });

@@ -1,7 +1,9 @@
+pub mod auth;
 mod commands;
 pub mod game;
 pub mod java;
 pub mod maven;
+pub mod modrinth;
 pub mod net;
 mod sysmon;
 pub mod task;
@@ -13,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::Installs::default())
         .manage(game::launch::Games::default())
+        .manage(auth::Logins::default())
         .setup(|app| {
             sysmon::spawn(app.handle().clone());
             Ok(())
@@ -35,6 +38,13 @@ pub fn run() {
             commands::inspect_game_dir,
             commands::version_settings,
             commands::set_version_settings,
+            commands::modrinth_search,
+            commands::modrinth_install,
+            commands::modrinth_identify,
+            commands::ms_login,
+            commands::ms_login_cancel,
+            commands::ms_accounts,
+            commands::ms_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

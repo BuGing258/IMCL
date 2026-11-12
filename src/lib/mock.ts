@@ -1,5 +1,5 @@
 // 演示用假数据：界面预览阶段使用，接入后端后替换为真实数据源。
-import type { VersionSettings } from "./api";
+import type { FileInfo, VersionSettings } from "./api";
 
 export type PackIcon = "sword" | "cube" | "leaf";
 export type Loader = "Fabric" | "Forge" | "NeoForge" | "Quilt" | "原版";
@@ -10,6 +10,7 @@ export interface ModEntry {
   version: string;
   size: string;
   enabled: boolean;
+  icon?: string | null;
 }
 
 /** 一个已安装的游戏版本（实例），里面装着自己的 Mod、光影和材质包 */
@@ -38,6 +39,8 @@ export interface Pack {
   isolated?: boolean;
   /** 版本独立设置；undefined = 还没读取 */
   vs?: VersionSettings;
+  /** 文件对应的 Modrinth 项目（"mods/文件名" → 项目） */
+  projects?: Record<string, FileInfo>;
 }
 
 /** 按加载器给版本挑颜色和图标 */

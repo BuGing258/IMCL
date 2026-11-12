@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 
+use crate::auth;
 use crate::game::{self, installed, launch, meta};
+use crate::modrinth;
 use crate::java::{self, JavaInfo};
 use crate::net::Source;
 use crate::task::TaskCtx;
@@ -80,10 +82,17 @@ pub async fn launch_game(
     app: AppHandle,
     installs: State<'_, Installs>,
     games: State<'_, launch::Games>,
-    req: launch::LaunchRequest,
+    mut req: launch::LaunchRequest,
 ) -> CmdResult<u32> {
     if let Some(r) = games.0.lock().unwrap().as_ref() {
         return Err(format!("{} 正在运行，先关掉它再启动", r.name));
+    }
+    // 正版账户：先确认登录还有效（快过期会自动刷新）
+    if let Some(id) = req.ms_account.clone() {
+        let acc = auth::ensure(&app, &id).await.map_err(err)?;
+        req.player = acc.name;
+        req.uuid = Some(acc.uuid);
+        req.access_token = Some(acc.access_token);
     }
     let cancel = Arc::new(AtomicBool::new(false));
     installs.0.lock().unwrap().insert(req.task_id.clone(), Arc::clone(&cancel));
@@ -98,6 +107,54 @@ pub async fn launch_game(
         return Err("已取消".into());
     }
     launch::spawn(app, req.name.clone(), prepared).map_err(err)
+}
+
+/* ---------- Modrinth ---------- */
+
+#[tauri::command]
+pub async fn modrinth_search(req: modrinth::SearchReq) -> CmdResult<modrinth::SearchResult> {
+    modrinth::search(&req).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn modrinth_install(req: modrinth::InstallReq) -> CmdResult<modrinth::InstallResult> {
+    modrinth::install(&req).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn modrinth_identify(game_dir: String, name: String) -> CmdResult<HashMap<String, modrinth::FileInfo>> {
+    modrinth::identify(&PathBuf::from(game_dir), &name).await.map_err(err)
+}
+
+/* ---------- 微软账户 ---------- */
+
+/// 设备码登录，完成后返回账户。等待期间会推送 `ms-device-code` 事件
+#[tauri::command]
+pub async fn ms_login(app: AppHandle, logins: State<'_, auth::Logins>, client_id: String) -> CmdResult<auth::AccountInfo> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(old) = logins.0.lock().unwrap().replace(Arc::clone(&cancel)) {
+        old.store(true, Ordering::Relaxed);
+    }
+    let r = auth::login(&app, &client_id, cancel).await;
+    logins.0.lock().unwrap().take();
+    r.map_err(err)
+}
+
+#[tauri::command]
+pub fn ms_login_cancel(logins: State<'_, auth::Logins>) {
+    if let Some(c) = logins.0.lock().unwrap().take() {
+        c.store(true, Ordering::Relaxed);
+    }
+}
+
+#[tauri::command]
+pub fn ms_accounts(app: AppHandle) -> Vec<auth::AccountInfo> {
+    auth::list(&app)
+}
+
+#[tauri::command]
+pub fn ms_remove(app: AppHandle, id: String) -> CmdResult<()> {
+    auth::remove(&app, &id).map_err(err)
 }
 
 #[tauri::command]

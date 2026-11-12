@@ -38,10 +38,18 @@ pub struct LaunchRequest {
     /// "default" / "720p" / "fullscreen"
     pub window_mode: String,
     pub jvm_args: String,
-    /// 离线账户的用户名
+    /// 角色名
     pub player: String,
     pub source: Source,
     pub threads: usize,
+    /// 微软账户 id；为空表示离线账户
+    #[serde(default)]
+    pub ms_account: Option<String>,
+    /// 以下由后端在正版登录后填写
+    #[serde(skip)]
+    pub uuid: Option<String>,
+    #[serde(skip)]
+    pub access_token: Option<String>,
 }
 
 /// 准备好的启动命令
@@ -51,6 +59,8 @@ pub struct Prepared {
     pub args: Vec<String>,
     pub run_dir: PathBuf,
     pub log_path: PathBuf,
+    /// 正版令牌：写日志时要遮住
+    pub secret: Option<String>,
 }
 
 /* ---------------- 版本 JSON ---------------- */
@@ -398,7 +408,9 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
     let custom_res = req.window_mode == "720p";
     let feature = |f: &str| f == "has_custom_resolution" && custom_res;
     let index_name = json.pointer("/assetIndex/id").or_else(|| json.get("assets")).and_then(Value::as_str).unwrap_or("legacy");
-    let uuid = offline_uuid(&req.player);
+    let online = req.access_token.is_some();
+    let uuid = req.uuid.clone().unwrap_or_else(|| offline_uuid(&req.player));
+    let token = req.access_token.clone().unwrap_or_else(|| uuid.clone());
     let s = |p: &Path| p.to_string_lossy().to_string();
     let vars: HashMap<&str, String> = HashMap::from([
         ("auth_player_name", req.player.clone()),
@@ -407,12 +419,12 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
         ("assets_root", s(&assets)),
         ("game_assets", s(&game_assets)),
         ("assets_index_name", index_name.to_string()),
-        ("auth_uuid", uuid.clone()),
-        ("auth_access_token", uuid.clone()),
-        ("auth_session", uuid),
+        ("auth_uuid", uuid),
+        ("auth_access_token", token.clone()),
+        ("auth_session", token),
         ("auth_xuid", "0".into()),
         ("clientid", "0".into()),
-        ("user_type", "legacy".into()),
+        ("user_type", if online { "msa" } else { "legacy" }.into()),
         ("user_properties", "{}".into()),
         ("version_type", "AMC".into()),
         ("launcher_name", "AMCLauncher".into()),
@@ -468,7 +480,7 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
     args.push(main_class);
     args.extend(game.iter().map(|a| substitute(a, &vars)));
 
-    Ok(Prepared { java, args, run_dir, log_path: version_dir.join("amc-latest.log") })
+    Ok(Prepared { java, args, run_dir, log_path: version_dir.join("amc-latest.log"), secret: req.access_token.clone() })
 }
 
 /* ---------------- 运行中的游戏 ---------------- */
@@ -569,7 +581,11 @@ pub fn spawn(app: AppHandle, name: String, p: Prepared) -> Result<u32> {
 
     let mut file = std::fs::File::create(&p.log_path).ok();
     if let Some(f) = file.as_mut() {
-        let _ = writeln!(f, "[AMC] Java {} ({})\n[AMC] {} {}\n", p.java.version, p.java.path, p.java.path, p.args.join(" "));
+        let mut cmdline = p.args.join(" ");
+        if let Some(t) = p.secret.as_deref().filter(|t| !t.is_empty()) {
+            cmdline = cmdline.replace(t, "******");
+        }
+        let _ = writeln!(f, "[AMC] Java {} ({})\n[AMC] {} {}\n", p.java.version, p.java.path, p.java.path, cmdline);
     }
     let mut child = cmd.spawn().with_context(|| format!("无法启动 Java：{}", p.java.path))?;
     let pid = child.id().unwrap_or(0);

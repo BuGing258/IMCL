@@ -26,6 +26,9 @@ async fn main() -> anyhow::Result<()> {
         player: args.get(2).filter(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| "AMCTest".into()),
         source: Source::Bmcl,
         threads: 64,
+        ms_account: None,
+        uuid: None,
+        access_token: None,
     };
     let ctx = TaskCtx::new("cli".into(), Arc::new(AtomicBool::new(false)), launch::STAGES);
     let t = Instant::now();

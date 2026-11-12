@@ -1,8 +1,11 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
-  import { Trash2, UserPlus, Info, Globe, KeyRound } from "@lucide/svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { Trash2, UserPlus, Info, Globe, KeyRound, Copy, ExternalLink, LoaderCircle, ChevronDown } from "@lucide/svelte";
   import PixelAvatar from "$lib/components/PixelAvatar.svelte";
-  import { accounts, toast, ACCOUNT_LABELS, type AccountType } from "$lib/state.svelte";
+  import { accounts, toast, settings, isTauri, ACCOUNT_LABELS, type AccountType } from "$lib/state.svelte";
+  import { api, type DeviceCode } from "$lib/api";
 
   let addType = $state<AccountType>("offline");
   let newName = $state("");
@@ -35,6 +38,61 @@
     }
     serverErr = "";
     toast.show("外置登录还没接入（界面演示）");
+  }
+
+  /* ---------- 微软登录 ---------- */
+  let msBusy = $state(false);
+  let msErr = $state("");
+  let code = $state<DeviceCode | null>(null);
+  let showClientId = $state(!settings.msClientId);
+
+  function open(url: string) {
+    if (isTauri()) openUrl(url).catch((e) => toast.show(String(e)));
+    else window.open(url, "_blank");
+  }
+
+  async function copyCode() {
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code.userCode);
+      toast.show("代码已复制");
+    } catch {
+      /* 复制不了就手动输入 */
+    }
+  }
+
+  async function msLogin() {
+    msErr = "";
+    if (!isTauri()) return toast.show("浏览器预览里不能登录");
+    if (!settings.msClientId.trim()) {
+      showClientId = true;
+      msErr = "先填写 Client ID";
+      return;
+    }
+    msBusy = true;
+    code = null;
+    const un = await listen<DeviceCode>("ms-device-code", async (e) => {
+      code = e.payload;
+      // 自动复制代码并打开登录网页，用户只需要粘贴
+      await copyCode();
+      open(e.payload.verificationUri);
+    });
+    try {
+      const info = await api.msLogin(settings.msClientId.trim());
+      accounts.addMicrosoft(info);
+      toast.show(`已登录 ${info.name}`);
+    } catch (e) {
+      const m = String(e);
+      if (!m.includes("已取消")) msErr = m;
+    } finally {
+      un();
+      msBusy = false;
+      code = null;
+    }
+  }
+
+  function msCancel() {
+    api.msLoginCancel();
   }
 
   function askRemove(id: string) {
@@ -70,7 +128,7 @@
               <PixelAvatar name={a.name} size={40} />
               <div class="a-text">
                 <b>{a.name}</b>
-                <span>{ACCOUNT_LABELS[a.type]}</span>
+                <span class:pro={a.type === "microsoft"}>{a.type === "microsoft" ? "正版账户" : ACCOUNT_LABELS[a.type]}</span>
               </div>
               {#if isCur}
                 <span class="badge red">使用中</span>
@@ -120,9 +178,48 @@
           </form>
         {:else if addType === "microsoft"}
           <p class="hint">用购买了 Minecraft 的微软账户登录，可以进正版服务器，显示正版皮肤。</p>
-          <button class="btn btn-primary wide" onclick={() => toast.show("微软登录还没接入（界面演示）")}>
-            <KeyRound size={14} />使用微软账户登录
+          {#if code}
+            <div class="code-box">
+              <p>在打开的网页里输入这个代码（已经复制好了）：</p>
+              <button class="code" onclick={copyCode} title="点击复制">{code.userCode}<Copy size={15} /></button>
+              <div class="code-actions">
+                <button class="btn btn-sm" onclick={() => code && open(code.verificationUri)}><ExternalLink size={14} />重新打开网页</button>
+                <button class="btn btn-sm" onclick={msCancel}>取消</button>
+              </div>
+              <p class="faint wait"><LoaderCircle size={13} class="spin" />网页上登录完成后会自动回到这里</p>
+            </div>
+          {:else}
+            <button class="btn btn-primary wide" onclick={msLogin} disabled={msBusy}>
+              {#if msBusy}<LoaderCircle size={14} class="spin" />正在连接微软…{:else}<KeyRound size={14} />使用微软账户登录{/if}
+            </button>
+          {/if}
+          {#if msErr}<p class="err-text">{msErr}</p>{/if}
+
+          <button class="fold" onclick={() => (showClientId = !showClientId)}>
+            <ChevronDown size={14} class={showClientId ? "rot" : ""} />Client ID 设置
+            {#if settings.msClientId}<span class="badge green">已填写</span>{:else}<span class="badge amber">未填写</span>{/if}
           </button>
+          {#if showClientId}
+            <div class="cid" transition:slide={{ duration: 180 }}>
+              <input
+                class="input mono"
+                placeholder="00000000-0000-0000-0000-000000000000"
+                bind:value={settings.msClientId}
+                spellcheck="false"
+                aria-label="Client ID"
+              />
+              <p class="faint">
+                微软要求每个启动器用自己的 Client ID，并经过 Mojang 批准才能登录 Minecraft。
+                在 Azure 注册一个应用（支持个人账户、开启“公共客户端流”），再提交 Mojang 的申请表，批下来后把 ID 填到这里。
+              </p>
+              <div class="links">
+                <button class="link" onclick={() => open("https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade")}>
+                  Azure 应用注册<ExternalLink size={11} />
+                </button>
+                <button class="link" onclick={() => open("https://aka.ms/mce-reviewappid")}>Mojang 申请表<ExternalLink size={11} /></button>
+              </div>
+            </div>
+          {/if}
         {:else}
           <form onsubmit={addAuthlib} novalidate>
             <p class="hint">用皮肤站之类的第三方认证服务器登录（authlib-injector）。</p>
@@ -141,7 +238,7 @@
           </form>
         {/if}
 
-        <p class="note"><Info size={13} />账户数据只保存在这台电脑上</p>
+        <p class="note"><Info size={13} />账户数据只保存在这台电脑上，正版登录令牌不会发给任何第三方</p>
       </section>
     </div>
   </div>
@@ -239,6 +336,93 @@
   }
   .wide {
     width: 100%;
+  }
+  .a-text span.pro {
+    color: var(--green);
+    font-weight: 600;
+  }
+  .code-box {
+    padding: 12px;
+    border-radius: var(--r);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-2);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .code {
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    border-radius: var(--r);
+    background: var(--surface);
+    border: 1px dashed var(--red);
+    color: var(--red);
+    font-family: var(--mono);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 3px;
+  }
+  .code-actions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+  }
+  .wait {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .fold {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .fold :global(svg) {
+    transition: transform 0.2s var(--ease);
+    transform: rotate(-90deg);
+  }
+  .fold :global(svg.rot) {
+    transform: none;
+  }
+  .cid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .cid .input {
+    width: 100%;
+  }
+  .mono {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .cid p {
+    font-size: 11.5px;
+    line-height: 1.6;
+  }
+  .links {
+    display: flex;
+    gap: 14px;
+  }
+  .link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    color: var(--red);
+  }
+  .link:hover {
+    text-decoration: underline;
   }
   .note {
     display: flex;

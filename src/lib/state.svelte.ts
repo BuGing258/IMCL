@@ -1,7 +1,7 @@
 // 全局界面状态（Svelte 5 runes）。
 // 已接后端：系统状态、下载安装、已安装版本。其余（Mod 市场、启动游戏、账户登录）仍是前端模拟。
 import { listen } from "@tauri-apps/api/event";
-import { api, isTauri, type GameExit, type InstallRequest, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
+import { api, isTauri, type GameExit, type InstallRequest, type MsAccountInfo, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
 import { mockPacks, packLook, type Loader, type Pack, type ResKind } from "./mock";
 
 export { isTauri };
@@ -84,6 +84,8 @@ export interface Settings {
   jvmArgs: string;
   /** 手动添加的 Java（自动查找找不到的） */
   extraJavas: JavaInfo[];
+  /** 微软登录用的 Azure 应用 Client ID */
+  msClientId: string;
 }
 
 export interface GameDir {
@@ -103,6 +105,7 @@ export const settings = $state<Settings>(
     gameDirs: [],
     selectedVersion: "",
     jvmArgs: "",
+    msClientId: "",
     extraJavas: [],
   }),
 );
@@ -130,6 +133,8 @@ export interface Account {
   id: string;
   name: string;
   type: AccountType;
+  /** 正版账户的 UUID */
+  uuid?: string;
 }
 
 class Accounts {
@@ -159,8 +164,32 @@ class Accounts {
 
   remove(id: string) {
     if (this.list.length <= 1) return;
+    const acc = this.list.find((a) => a.id === id);
+    // 正版账户的登录令牌存在后端，一起删掉
+    if (acc?.type === "microsoft") api.msRemove(id).catch(() => {});
     this.list = this.list.filter((a) => a.id !== id);
     if (this.currentId === id) this.currentId = this.list[0].id;
+  }
+
+  /** 微软登录成功后加入（同一个角色重复登录只更新名字） */
+  addMicrosoft(info: MsAccountInfo) {
+    const old = this.list.find((a) => a.id === info.id);
+    if (old) old.name = info.name;
+    else this.list.push({ id: info.id, name: info.name, type: "microsoft", uuid: info.uuid });
+    this.currentId = info.id;
+  }
+
+  /** 启动时和后端保存的正版账户对一下：登录信息丢了的就去掉 */
+  async syncMicrosoft() {
+    if (!isTauri()) return;
+    const saved = await api.msAccounts().catch(() => null);
+    if (!saved) return;
+    for (const s of saved) if (!this.list.some((a) => a.id === s.id)) this.list.push({ id: s.id, name: s.name, type: "microsoft", uuid: s.uuid });
+    const keep = this.list.filter((a) => a.type !== "microsoft" || saved.some((s) => s.id === a.id));
+    if (keep.length && keep.length !== this.list.length) {
+      this.list = keep;
+      if (!keep.some((a) => a.id === this.currentId)) this.currentId = keep[0].id;
+    }
   }
 
   persist() {
@@ -245,6 +274,26 @@ class Library {
     pack.shaders = f.shaderpacks.map((x) => x.file);
     pack.resourcepacks = f.resourcepacks.map((x) => x.file);
     pack.filesLoaded = true;
+    this.identify(pack);
+  }
+
+  /** 在 Modrinth 上查出每个文件是哪个 Mod，换成正式名字和版本号（查不到的保留文件名） */
+  async identify(pack: Pack) {
+    if (!pack.real) return;
+    try {
+      const info = await api.identify(settings.gameDir, pack.name);
+      pack.projects = info;
+      for (const m of pack.mods) {
+        const i = info[`mods/${m.id}`];
+        if (i) {
+          m.name = i.title;
+          m.version = i.versionNumber;
+          m.icon = i.icon;
+        }
+      }
+    } catch {
+      /* 没网时就显示文件名 */
+    }
   }
 
   /** 读取版本独立设置 */
@@ -544,6 +593,7 @@ export const installs = new Installs();
 /** 启动时：取默认游戏目录，然后扫描已安装的版本 */
 export async function initBackend() {
   javas.load();
+  accounts.syncMicrosoft();
   await gameDirs.init();
   await library.refresh();
 }
@@ -658,8 +708,8 @@ class Game {
 
     const vs = await library.loadSettings(p).catch(() => ({}) as VersionSettings);
     const acc = accounts.list.find((a) => a.id === vs.account) ?? accounts.current;
-    if (acc.type !== "offline") {
-      toast.show(`${ACCOUNT_LABELS[acc.type]}还没接入，请先用离线账户`);
+    if (acc.type === "authlib") {
+      toast.show("外置登录还没接入，请先用离线或微软账户");
       return;
     }
 
@@ -678,6 +728,7 @@ class Game {
         windowMode: vs.windowMode ?? settings.windowMode,
         jvmArgs: vs.jvmArgs ?? settings.jvmArgs,
         player: acc.name,
+        msAccount: acc.type === "microsoft" ? acc.id : null,
         source: settings.source,
         threads: settings.threads,
       });
