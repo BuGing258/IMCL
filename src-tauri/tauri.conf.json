@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AMC Launcher",
+  "productName": "IMCL",
   "version": "0.1.0",
   "identifier": "com.amclauncher.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "AMC Launcher",
+        "title": "IMCL",
         "width": 960,
         "height": 600,
         "minWidth": 800,

@@ -33,28 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "amc-launcher"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures-util",
- "md-5",
- "reqwest",
- "serde",
- "serde_json",
- "sha1_smol",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "trash",
- "windows",
- "zip",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1831,6 +1809,28 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "imcl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "md-5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "trash",
+ "windows",
+ "zip",
 ]
 
 [[package]]

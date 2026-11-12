@@ -29,7 +29,7 @@
         <ChevronLeft size={18} />
       </button>
     {/if}
-    <button class="brand" onclick={() => nav.home()} title="回到首页">AMC</button>
+    <button class="brand" onclick={() => nav.home()} title="回到首页">IMCL</button>
     {#key nav.current}
       {#if nav.current !== "home"}
         <span class="crumb" data-tauri-drag-region in:fly={{ x: 8, duration: 220 }}>

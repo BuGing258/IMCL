@@ -2,6 +2,7 @@ pub mod auth;
 mod commands;
 pub mod game;
 pub mod java;
+pub mod jre;
 pub mod maven;
 pub mod modpack;
 pub mod modrinth;
@@ -19,6 +20,9 @@ pub fn run() {
         .manage(game::launch::Games::default())
         .manage(auth::Logins::default())
         .setup(|app| {
+            if let Ok(dir) = tauri::Manager::path(app).app_data_dir() {
+                jre::set_root(dir.join("java"));
+            }
             sysmon::spawn(app.handle().clone());
             Ok(())
         })
@@ -28,6 +32,8 @@ pub fn run() {
             commands::loader_versions,
             commands::optifine_versions,
             commands::find_java,
+            commands::java_offers,
+            commands::download_java,
             commands::install_version,
             commands::cancel_install,
             commands::list_installed,

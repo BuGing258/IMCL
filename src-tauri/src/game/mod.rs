@@ -91,9 +91,6 @@ pub async fn install(ctx: &TaskCtx, req: &InstallRequest) -> Result<()> {
         }
     }
     let javas = if needs_java(req) { java::find_all() } else { Vec::new() };
-    if needs_java(req) && javas.is_empty() {
-        bail!("安装 Forge、NeoForge 或 OptiFine 需要 Java，但电脑上没找到。请先安装 Java 17 或 21。");
-    }
 
     let version_dir = game_dir.join("versions").join(&req.name);
     let tmp = game_dir.join(".amc-tmp").join(&req.task_id);
@@ -128,7 +125,21 @@ async fn run(
     let entry = meta::find_version(&req.mc, src).await?;
     let vanilla: Value = net::get_json(&entry.url, src).await.context("获取版本 JSON 失败")?;
     let required_java = vanilla.pointer("/javaVersion/majorVersion").and_then(Value::as_u64).map(|v| v as u32);
-    let java = java::pick(javas, required_java);
+    // 装 Forge / OptiFine 要用 Java 跑安装器；电脑上一个都没有就先下载这个版本要的 Java
+    let downloaded;
+    let java = match java::pick(javas, required_java) {
+        Some(j) => Some(j),
+        None if needs_java(req) => {
+            let component = vanilla
+                .pointer("/javaVersion/component")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::jre::component_for(required_java.unwrap_or(8)).to_string());
+            downloaded = crate::jre::install(ctx, &component, req.threads).await.context("电脑上没有 Java，自动下载也失败了")?;
+            Some(&downloaded)
+        }
+        None => None,
+    };
 
     let env = InstallEnv {
         mc: &req.mc,

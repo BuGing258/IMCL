@@ -157,7 +157,7 @@ pub fn write_settings(game_dir: &Path, version: &str, s: &VersionSettings) -> Re
     std::fs::write(&p, serde_json::to_vec_pretty(s)?).context("无法保存版本设置")
 }
 
-/// 没手动设置时自动判断：AMC 装的版本默认隔离；其他启动器装的，看版本文件夹里有没有 mods / saves 等
+/// 没手动设置时自动判断：IMCL 装的版本默认隔离；其他启动器装的，看版本文件夹里有没有 mods / saves 等
 fn isolated(dir: &Path, by_amc: bool) -> bool {
     let explicit = std::fs::read(dir.join(SETTINGS_FILE))
         .ok()

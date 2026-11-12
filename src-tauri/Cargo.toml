@@ -1,8 +1,8 @@
 [package]
-name = "amc-launcher"
+name = "imcl"
 version = "0.1.0"
-description = "AMC Launcher - a lightweight Minecraft launcher"
-authors = ["AMC"]
+description = "IMCL - a lightweight Minecraft launcher"
+authors = ["IMCL"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -11,7 +11,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "amc_launcher_lib"
+name = "imcl_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

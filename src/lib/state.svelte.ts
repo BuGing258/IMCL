@@ -1,7 +1,7 @@
 // 全局界面状态（Svelte 5 runes）。
 // 已接后端：系统状态、下载安装、已安装版本。其余（Mod 市场、启动游戏、账户登录）仍是前端模拟。
 import { listen } from "@tauri-apps/api/event";
-import { api, isTauri, type GameExit, type InstallRequest, type MsAccountInfo, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
+import { api, isTauri, type JavaOffer, type GameExit, type InstallRequest, type MsAccountInfo, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
 import { mockPacks, packLook, type Loader, type Pack, type ResKind, type MarketKind } from "./mock";
 
 export { isTauri };
@@ -483,6 +483,29 @@ class Javas {
     return this.#loading;
   }
 
+  /** 重新查找（下载了新的 Java 之后） */
+  refresh() {
+    this.#loading = undefined;
+    return Promise.all([this.load(), this.loadOffers()]);
+  }
+
+  /* ---------- 下载 Java ---------- */
+  offers = $state<JavaOffer[] | null>(null);
+
+  async loadOffers() {
+    this.offers = await api.javaOffers().catch(() => this.offers ?? []);
+  }
+
+  /** 正在下载这个组件的任务 */
+  taskOf(component: string) {
+    return Object.values(installs.tasks).find((t) => t.java === component);
+  }
+
+  download(o: JavaOffer) {
+    if (this.taskOf(o.component)) return;
+    installs.startJava(o);
+  }
+
   label(path: string) {
     if (path === "auto") return "自动选择";
     const j = this.all.find((x) => x.path === path);
@@ -533,6 +556,8 @@ export interface InstallTask {
   error?: string;
   /** 整合包安装：Modrinth 项目号 */
   modpack?: string;
+  /** Java 下载：组件名 */
+  java?: string;
 }
 
 export interface InstallOptions {
@@ -551,8 +576,68 @@ class Installs {
     return Object.values(this.tasks).find((t) => t.mc === mc);
   }
 
+  /** 正在安装的游戏版本数（不算 Java 下载） */
   get running() {
-    return Object.values(this.tasks).filter((t) => t.status !== "error").length;
+    return Object.values(this.tasks).filter((t) => t.status !== "error" && !t.java).length;
+  }
+
+  /** 下载 Java：先测速，用官方源和镜像里快的那个 */
+  startJava(o: JavaOffer) {
+    const id = `j-${Date.now()}`;
+    this.tasks[id] = {
+      id,
+      mc: "",
+      name: `Java ${o.major}`,
+      java: o.component,
+      stage: "准备中",
+      stageIndex: 0,
+      stageCount: 2,
+      done: 0,
+      total: 0,
+      speed: 0,
+      status: "running",
+    };
+    if (!isTauri()) {
+      // 浏览器预览：假进度
+      let p = 0;
+      const timer = setInterval(() => {
+        const t = this.tasks[id];
+        if (!t || t.status === "cancelling") {
+          clearInterval(timer);
+          delete this.tasks[id];
+          return;
+        }
+        p += 6;
+        Object.assign(t, p < 20 ? { stage: "测试下载源速度", stageIndex: 1, done: p, total: 20 } : { stage: `下载 Java ${o.major}（BMCLAPI 镜像更快）`, stageIndex: 2, done: p - 20, total: 80 });
+        if (p >= 100) {
+          clearInterval(timer);
+          delete this.tasks[id];
+          const off = javas.offers?.find((x) => x.component === o.component);
+          if (off) off.installed = { path: `java-${o.major}`, version: `${o.major}.0.0`, major: o.major };
+          toast.show(`Java ${o.major} 下载好了（演示）`);
+        }
+      }, 120);
+      return;
+    }
+    this.#listen();
+    api
+      .downloadJava(id, o.component, settings.threads)
+      .then(async (info) => {
+        const src = this.tasks[id]?.stage.match(/（(.+?)更快）/)?.[1];
+        delete this.tasks[id];
+        await javas.refresh();
+        toast.show(`Java ${info.major} 下载好了${src ? `（用的${src}）` : ""}，启动游戏时会自动用它`);
+      })
+      .catch((e) => {
+        const msg = String(e);
+        if (msg.includes("已取消")) {
+          delete this.tasks[id];
+          toast.show(`已取消下载 Java ${o.major}`);
+        } else {
+          const t = this.tasks[id];
+          if (t) Object.assign(t, { status: "error", error: msg });
+        }
+      });
   }
 
   #listen() {
@@ -766,6 +851,9 @@ class Game {
   packId = $state("");
   stage = $state("准备中");
   stageIndex = $state(0);
+  /** 一共几步（自动下载 Java 时会多出两步） */
+  stageCount = $state(LAUNCH_STAGES);
+  #gotJava = false;
   done = $state(0);
   total = $state(0);
   elapsed = $state(0);
@@ -775,7 +863,7 @@ class Game {
   confirmStop = $state(false);
 
   progress = $derived(
-    Math.min(100, ((Math.max(this.stageIndex, 1) - 1 + (this.total ? this.done / this.total : 0)) / LAUNCH_STAGES) * 100),
+    Math.min(100, ((Math.max(this.stageIndex, 1) - 1 + (this.total ? this.done / this.total : 0)) / this.stageCount) * 100),
   );
   step = $derived(this.stage);
 
@@ -793,8 +881,10 @@ class Game {
       if (p.taskId !== this.#taskId || this.status !== "preparing") return;
       this.stage = p.stage;
       this.stageIndex = p.stageIndex;
+      this.stageCount = Math.max(LAUNCH_STAGES, p.stageCount);
       this.done = p.done;
       this.total = p.total;
+      if (p.stage.startsWith("下载 Java")) this.#gotJava = true;
     });
     listen<string>("game-ready", () => {
       if (this.status === "running") this.ready = true;
@@ -829,6 +919,7 @@ class Game {
     this.confirmStop = false;
     this.elapsed = 0;
     this.stageIndex = 0;
+    this.stageCount = LAUNCH_STAGES;
     this.done = 0;
     this.total = 0;
   }
@@ -850,6 +941,7 @@ class Game {
     this.packId = p.id;
     this.stage = "准备中";
     this.stageIndex = 0;
+    this.stageCount = LAUNCH_STAGES;
 
     const vs = await library.loadSettings(p).catch(() => ({}) as VersionSettings);
     const acc = accounts.list.find((a) => a.id === vs.account) ?? accounts.current;
@@ -878,6 +970,11 @@ class Game {
         threads: settings.threads,
       });
       if (this.#taskId !== taskId) return;
+      // 启动时自动下载了 Java：刷新一下列表
+      if (this.#gotJava) {
+        this.#gotJava = false;
+        javas.refresh();
+      }
       // 准备期间点了取消：进程刚起来就关掉
       if (this.status !== "preparing") {
         api.stopGame();

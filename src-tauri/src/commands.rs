@@ -12,6 +12,7 @@ use crate::modpack;
 use crate::modrinth;
 use crate::skin;
 use crate::java::{self, JavaInfo};
+use crate::jre;
 use crate::net::Source;
 use crate::task::TaskCtx;
 
@@ -73,6 +74,31 @@ pub async fn install_modpack(app: AppHandle, installs: State<'_, Installs>, req:
     let result = modpack::install(&ctx, &req).await;
     ctx.finish();
     installs.0.lock().unwrap().remove(&req.task_id);
+    result.map_err(err)
+}
+
+/// 可以下载的 Java（设置页）
+#[tauri::command]
+pub async fn java_offers() -> Vec<jre::OfferState> {
+    tauri::async_runtime::spawn_blocking(jre::offers).await.unwrap_or_default()
+}
+
+/// 下载一个 Java（自动测速选官方源或镜像），进度走 `install-progress`
+#[tauri::command]
+pub async fn download_java(
+    app: AppHandle,
+    installs: State<'_, Installs>,
+    task_id: String,
+    component: String,
+    threads: usize,
+) -> CmdResult<JavaInfo> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    installs.0.lock().unwrap().insert(task_id.clone(), Arc::clone(&cancel));
+    let ctx = TaskCtx::new(task_id.clone(), cancel, 2);
+    ctx.spawn_reporter(app, "install-progress");
+    let result = jre::install(&ctx, &component, threads).await;
+    ctx.finish();
+    installs.0.lock().unwrap().remove(&task_id);
     result.map_err(err)
 }
 

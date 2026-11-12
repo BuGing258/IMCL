@@ -349,10 +349,25 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
     ctx.stage("检查版本信息");
     let (json, client_jar) = resolve_version(&game_dir, &req.name)?;
     let main_class = json["mainClass"].as_str().ok_or_else(|| anyhow!("版本 JSON 里没有 mainClass"))?.to_string();
+    let need = required_java(&json);
     let java = {
         let sel = req.java.clone();
-        let need = required_java(&json);
-        tauri::async_runtime::spawn_blocking(move || choose_java(&sel, need)).await??
+        tauri::async_runtime::spawn_blocking(move || choose_java(&sel, need)).await?
+    };
+    let java = match java {
+        Ok(j) => j,
+        // 自动选 Java 但电脑上没有合适的：像官方启动器一样自动下载
+        Err(_) if req.java.is_empty() || req.java == "auto" => {
+            let component = json
+                .pointer("/javaVersion/component")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::jre::component_for(need).to_string());
+            crate::jre::install(ctx, &component, req.threads)
+                .await
+                .with_context(|| format!("电脑上没有 Java {need}，自动下载也失败了"))?
+        }
+        Err(e) => return Err(e),
     };
 
     // 2. 游戏本体和依赖库（只看文件在不在、大小对不对，启动要快）
@@ -426,8 +441,8 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
         ("clientid", "0".into()),
         ("user_type", if online { "msa" } else { "legacy" }.into()),
         ("user_properties", "{}".into()),
-        ("version_type", "AMC".into()),
-        ("launcher_name", "AMCLauncher".into()),
+        ("version_type", "IMCL".into()),
+        ("launcher_name", "IMCL".into()),
         ("launcher_version", env!("CARGO_PKG_VERSION").into()),
         ("natives_directory", s(&natives)),
         ("library_directory", s(&libdir)),
@@ -585,7 +600,7 @@ pub fn spawn(app: AppHandle, name: String, p: Prepared) -> Result<u32> {
         if let Some(t) = p.secret.as_deref().filter(|t| !t.is_empty()) {
             cmdline = cmdline.replace(t, "******");
         }
-        let _ = writeln!(f, "[AMC] Java {} ({})\n[AMC] {} {}\n", p.java.version, p.java.path, p.java.path, cmdline);
+        let _ = writeln!(f, "[IMCL] Java {} ({})\n[IMCL] {} {}\n", p.java.version, p.java.path, p.java.path, cmdline);
     }
     let mut child = cmd.spawn().with_context(|| format!("无法启动 Java：{}", p.java.path))?;
     let pid = child.id().unwrap_or(0);

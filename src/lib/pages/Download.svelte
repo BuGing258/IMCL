@@ -328,7 +328,7 @@
                 {/if}
 
                 {#if noJava}
-                  <div class="note bad"><Info size={14} />没找到 Java。装 Forge、NeoForge、OptiFine 需要 Java，请先安装 Java 17 或 21。</div>
+                  <div class="note"><Info size={14} />没找到 Java。装 Forge、NeoForge、OptiFine 要用到 Java，安装时会自动下载合适的版本。</div>
                 {/if}
 
                 <div class="opt">

@@ -30,7 +30,7 @@ pub fn parse_major(version: &str) -> Option<u32> {
 }
 
 /// 从 Java 安装目录（含 bin）读取版本
-fn probe(home: &Path) -> Option<JavaInfo> {
+pub fn probe(home: &Path) -> Option<JavaInfo> {
     let exe = home.join("bin").join(JAVA_EXE);
     if !exe.is_file() {
         return None;
@@ -57,6 +57,10 @@ fn push_children(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn candidate_homes() -> Vec<PathBuf> {
     let mut homes = Vec::new();
+    // 启动器自己下载的 Java
+    if let Some(root) = crate::jre::root() {
+        push_children(root, &mut homes);
+    }
     if let Ok(h) = std::env::var("JAVA_HOME") {
         homes.push(PathBuf::from(h));
     }

@@ -1,8 +1,34 @@
 <script lang="ts">
-  import { FolderOpen, X } from "@lucide/svelte";
+  import { FolderOpen, X, Check, Download as DownloadIcon, ExternalLink } from "@lucide/svelte";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { appDataDir } from "@tauri-apps/api/path";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
-  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem } from "$lib/state.svelte";
+  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem, installs, type InstallTask } from "$lib/state.svelte";
+
+  if (!javas.offers) javas.loadOffers();
+
+  let version = $state("0.1.0");
+  if (isTauri()) getVersion().then((v) => (version = v)).catch(() => {});
+
+  function link(url: string) {
+    if (isTauri()) openUrl(url).catch((e) => toast.show(String(e)));
+    else window.open(url, "_blank");
+  }
+
+  /** 启动器自己的数据：账户、下载的 Java、皮肤缓存等 */
+  async function openDataDir() {
+    if (!isTauri()) return toast.show("浏览器预览里打不开文件夹");
+    try {
+      await revealItemInDir(await appDataDir());
+    } catch (e) {
+      toast.show(`打不开：${e}`);
+    }
+  }
+
+  /** 下载进度（0~100） */
+  const pct = (t: InstallTask) => Math.min(99, Math.floor(((Math.max(1, t.stageIndex) - 1 + (t.total ? t.done / t.total : 0)) / Math.max(1, t.stageCount)) * 100));
 
   const dirOptions = $derived(settings.gameDirs.map((d) => ({ value: d.path, label: d.name, hint: d.path })));
 
@@ -80,6 +106,38 @@
           />
         </div>
       </div>
+      <div class="row col">
+        <div class="lbl">
+          <b>下载 Java</b>
+          <span>缺 Java 时启动游戏会自动下载，也可以先下好。下载前会测一下速度，自动用官方源和镜像里快的那个</span>
+        </div>
+        <div class="jgrid">
+          {#each javas.offers ?? [] as o (o.component)}
+            {@const t = javas.taskOf(o.component)}
+            <div class="jcard" class:ok={!!o.installed && !t}>
+              <div class="jt">
+                <b>Java {o.major}</b>
+                <span>{t && t.status !== "error" ? t.stage : o.forGames}</span>
+              </div>
+              {#if t?.status === "error"}
+                <button class="btn btn-sm fail" title={t.error} onclick={() => (installs.cancel(t.id), javas.download(o))}>失败，重试</button>
+              {:else if t}
+                <span class="jrun">
+                  <span class="jbar"><i style:width="{pct(t)}%"></i></span>
+                  <span class="jpct">{pct(t)}%</span>
+                  <button class="btn btn-sm btn-icon" onclick={() => installs.cancel(t.id)} disabled={t.status === "cancelling"} aria-label="取消下载" title="取消下载"><X size={13} /></button>
+                </span>
+              {:else if o.installed}
+                <span class="badge green" title={o.installed.path}><Check size={11} />已下载 {o.installed.version}</span>
+              {:else}
+                <button class="btn btn-sm" onclick={() => javas.download(o)}><DownloadIcon size={13} />下载</button>
+              {/if}
+            </div>
+          {:else}
+            <p class="faint">正在读取…</p>
+          {/each}
+        </div>
+      </div>
       <div class="row">
         <div class="lbl"><b>JVM 参数</b><span>追加在启动参数里，不懂可以留空</span></div>
         <div class="ctl">
@@ -135,7 +193,36 @@
     <section class="group" style:--i={4}>
       <h2>关于</h2>
       <div class="row">
-        <div class="lbl"><b>AMC Launcher 0.1.0</b><span>下载安装、版本管理已可用；启动游戏和 Mod 下载还在做</span></div>
+        <div class="about">
+          <span class="logo">IMCL</span>
+          <div class="lbl"><b>IMCL {version}</b><span>轻量的 Minecraft Java 版启动器，和朋友一起玩用</span></div>
+        </div>
+        <div class="ctl">
+          <button class="btn btn-sm" onclick={openDataDir} title="账户、下载的 Java、皮肤缓存都在这里"><FolderOpen size={14} />数据文件夹</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="lbl">
+          <b>能做什么</b>
+          <span>安装原版、Fabric、Forge、NeoForge、Quilt 和 OptiFine；下载 Mod、光影、材质包和整合包；离线和微软正版登录；缺 Java 时自动下载</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="lbl">
+          <b>下载服务</b>
+          <span>
+            游戏文件来自 Mojang 官方和
+            <button class="lnk" onclick={() => link("https://bmclapidoc.bangbang93.com")}>BMCLAPI<ExternalLink size={10} /></button>
+            镜像，Mod 和整合包来自
+            <button class="lnk" onclick={() => link("https://modrinth.com")}>Modrinth<ExternalLink size={10} /></button>
+            和
+            <button class="lnk" onclick={() => link("https://github.com/mcmod-info-mirror/mcim")}>MCIM<ExternalLink size={10} /></button>
+            镜像，感谢它们
+          </span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="lbl"><span class="faint">IMCL 不是 Mojang 或微软的官方产品，Minecraft 是 Mojang Studios 的商标</span></div>
       </div>
     </section>
   </div>
@@ -177,6 +264,103 @@
   }
   .row:first-of-type:last-child {
     border-radius: var(--r-lg);
+  }
+  .about {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .logo {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--red);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+  }
+  .lnk {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--red);
+    font-size: inherit;
+  }
+  .lnk:hover {
+    text-decoration: underline;
+  }
+  .row.col {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .jgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 8px;
+  }
+  .jcard {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 8px 10px 8px 12px;
+    border-radius: var(--r);
+    border: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .jcard.ok {
+    border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  }
+  .jt {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .jt b {
+    font-size: 13px;
+  }
+  .jt span {
+    font-size: 11.5px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .jrun {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .jbar {
+    width: 56px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--hover);
+    overflow: hidden;
+  }
+  .jbar i {
+    display: block;
+    height: 100%;
+    background: var(--red);
+    transition: width 0.3s;
+  }
+  .jpct {
+    font-size: 12px;
+    color: var(--text-2);
+    min-width: 30px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .fail {
+    color: var(--red);
+    border-color: var(--red);
   }
   .lbl {
     display: flex;

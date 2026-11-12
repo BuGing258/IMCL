@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title AMC Launcher (dev)
+title IMCL (dev)
 cd /d "%~dp0"
 
 rem 第一次运行先装依赖
@@ -15,7 +15,7 @@ netstat -ano | findstr /r /c:":1420 .*LISTENING" >nul && (
   goto :fail
 )
 
-echo 正在启动 AMC Launcher（第一次编译要等几分钟）...
+echo 正在启动 IMCL（第一次编译要等几分钟）...
 call npm run tauri dev || goto :fail
 exit /b 0
 

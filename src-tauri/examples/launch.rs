@@ -2,9 +2,9 @@
 //! cargo run --example launch -- <游戏目录> <版本名> [玩家名] [--keep]
 //! 加 --keep 则不自动关闭，游戏退出后打印退出码。
 
-use amc_launcher_lib::game::launch::{self, LaunchRequest};
-use amc_launcher_lib::net::Source;
-use amc_launcher_lib::task::TaskCtx;
+use imcl_lib::game::launch::{self, LaunchRequest};
+use imcl_lib::net::Source;
+use imcl_lib::task::TaskCtx;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         memory: 4096,
         window_mode: "720p".into(),
         jvm_args: String::new(),
-        player: args.get(2).filter(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| "AMCTest".into()),
+        player: args.get(2).filter(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| "IMCLTest".into()),
         source: Source::Bmcl,
         threads: 64,
         ms_account: None,

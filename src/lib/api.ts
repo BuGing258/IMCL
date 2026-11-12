@@ -182,6 +182,17 @@ export interface ModVersion {
   loaders: string[];
 }
 
+/** 可以下载的 Java */
+export interface JavaOffer {
+  component: string;
+  major: number;
+  version: string;
+  /** 适合哪些游戏版本 */
+  forGames: string;
+  /** 已经下载好的话是它的信息 */
+  installed: JavaInfo | null;
+}
+
 /** 安装整合包：新建一个游戏版本 */
 export interface ModpackRequest {
   taskId: string;
@@ -279,6 +290,19 @@ export const api = {
 
   findJava: (): Promise<JavaInfo[]> =>
     isTauri() ? invoke("find_java") : Promise.resolve([{ path: "java", version: "21", major: 21 }]),
+
+  javaOffers: async (): Promise<JavaOffer[]> => {
+    if (isTauri()) return invoke("java_offers");
+    return [
+      { component: "java-runtime-epsilon", major: 25, version: "", forGames: "26.1 及以后", installed: null },
+      { component: "java-runtime-delta", major: 21, version: "", forGames: "1.20.5 ～ 1.21.x", installed: { path: "java", version: "21.0.7", major: 21 } },
+      { component: "java-runtime-gamma", major: 17, version: "", forGames: "1.18 ～ 1.20.4", installed: null },
+      { component: "jre-legacy", major: 8, version: "", forGames: "1.16.5 及以前", installed: null },
+    ];
+  },
+  /** 下载 Java（自动测速选官方源或镜像），进度走 install-progress */
+  downloadJava: (taskId: string, component: string, threads: number): Promise<JavaInfo> =>
+    invoke("download_java", { taskId, component, threads }),
 
   install: (req: InstallRequest): Promise<void> => invoke("install_version", { req }),
   installModpack: (req: ModpackRequest): Promise<void> => invoke("install_modpack", { req }),

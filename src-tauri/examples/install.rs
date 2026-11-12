@@ -2,9 +2,9 @@
 //! cargo run --example install -- <游戏目录> <版本名> <MC版本> [fabric|quilt|forge|neoforge|-] [optifine]
 //! 加载器版本自动选最新的稳定版。
 
-use amc_launcher_lib::game::{self, meta, LoaderReq, OptiFineReq};
-use amc_launcher_lib::net::Source;
-use amc_launcher_lib::task::TaskCtx;
+use imcl_lib::game::{self, meta, LoaderReq, OptiFineReq};
+use imcl_lib::net::Source;
+use imcl_lib::task::TaskCtx;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
