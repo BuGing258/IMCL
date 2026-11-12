@@ -86,7 +86,7 @@ export interface GameExit {
 }
 
 /* ---------- Modrinth ---------- */
-export type ResKindApi = "mod" | "shader" | "resourcepack";
+export type ResKindApi = "mod" | "shader" | "resourcepack" | "modpack";
 
 export interface SearchReq {
   kind: ResKindApi;
@@ -126,6 +126,28 @@ export interface ResInstallReq {
   versionId?: string | null;
   /** 已经装了也重新装（旧文件移到回收站） */
   reinstall?: boolean;
+  /** 自动装必需的前置，默认开 */
+  withDeps?: boolean;
+}
+
+export interface ResDepsReq {
+  gameDir: string;
+  version: string;
+  kind: ResKindApi;
+  versionId: string;
+  mc: string;
+  loader: string | null;
+}
+
+/** 选中的资源版本需要的一个前置 */
+export interface ResDep {
+  projectId: string;
+  title: string;
+  icon: string | null;
+  /** 这个游戏版本里已经装了 */
+  installed: boolean;
+  /** 有适合这个游戏版本的文件 */
+  available: boolean;
 }
 
 export interface ResInstallResult {
@@ -155,6 +177,20 @@ export interface ModVersion {
   downloads: number;
   file: string;
   size: number;
+  /** 支持的游戏版本和加载器（整合包显示用） */
+  gameVersions: string[];
+  loaders: string[];
+}
+
+/** 安装整合包：新建一个游戏版本 */
+export interface ModpackRequest {
+  taskId: string;
+  gameDir: string;
+  name: string;
+  projectId: string;
+  versionId: string;
+  source: Source;
+  threads: number;
 }
 
 /** 已安装文件对应的 Modrinth 项目；键是 "mods/文件名" */
@@ -245,6 +281,7 @@ export const api = {
     isTauri() ? invoke("find_java") : Promise.resolve([{ path: "java", version: "21", major: 21 }]),
 
   install: (req: InstallRequest): Promise<void> => invoke("install_version", { req }),
+  installModpack: (req: ModpackRequest): Promise<void> => invoke("install_modpack", { req }),
   cancel: (taskId: string): Promise<void> => invoke("cancel_install", { taskId }),
 
   listInstalled: (gameDir: string): Promise<InstalledVersion[]> => invoke("list_installed", { gameDir }),
@@ -282,16 +319,30 @@ export const api = {
     if (isTauri()) return invoke("modrinth_versions", { req });
     await sleep(400);
     const types: ModVersion["versionType"][] = ["release", "release", "beta", "release", "alpha", "release"];
+    const mcs = ["1.21.1", "1.20.1", "1.20.1", "1.19.2", "1.19.2", "1.18.2"];
     return types.map((t, i) => ({
+      gameVersions: [req.mc || mcs[i]],
+      loaders: req.kind === "modpack" ? [i % 3 === 2 ? "forge" : "fabric"] : [],
       id: `${req.projectId}-v${i}`,
       name: `${req.projectId} ${3 - i * 0.1}`,
-      versionNumber: `${(3 - i * 0.1).toFixed(1)}.0+${req.mc}`,
+      versionNumber: `${(3 - i * 0.1).toFixed(1)}.0+${req.mc || mcs[i]}`,
       versionType: t,
       published: new Date(Date.now() - i * 26 * 86400_000).toISOString(),
       downloads: Math.round(900_000 / (i + 1)),
       file: `${req.projectId}-${i}.jar`,
       size: 1_200_000 - i * 40_000,
     }));
+  },
+  /** 选中版本的必需前置 */
+  resourceDeps: async (req: ResDepsReq): Promise<ResDep[]> => {
+    if (isTauri()) return invoke("modrinth_deps", { req });
+    await sleep(300);
+    if (req.kind !== "mod" || req.versionId.endsWith("v5")) return [];
+    return [
+      { projectId: "P7dR8mSH", title: "Fabric API", icon: null, installed: true, available: true },
+      { projectId: "9s6osm5g", title: "Cloth Config API", icon: null, installed: false, available: true },
+      { projectId: "mOgUt4GM", title: "Mod Menu", icon: null, installed: false, available: !req.versionId.endsWith("v1") },
+    ];
   },
   installResource: async (req: ResInstallReq): Promise<ResInstallResult> => {
     if (isTauri()) return invoke("modrinth_install", { req });
@@ -301,7 +352,7 @@ export const api = {
       file: `${req.projectId}.jar`,
       versionNumber: req.versionId ?? "最新",
       replaced: req.reinstall ? [`${req.projectId}-old.jar`] : [],
-      deps: [],
+      deps: req.withDeps === false ? [] : ["Cloth Config API"],
       missing: [],
     };
   },

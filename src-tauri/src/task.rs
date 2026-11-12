@@ -66,6 +66,12 @@ impl TaskCtx {
         self.total.store(0, Ordering::Relaxed);
     }
 
+    /// 开始后才知道一共几步时改总数
+    pub fn set_stage_count(&self, n: u32) {
+        let mut s = self.stage.lock().unwrap();
+        s.2 = n.max(s.1);
+    }
+
     /// 当前阶段：(名称, 序号, 总数)
     pub fn current_stage(&self) -> (String, u32, u32) {
         self.stage.lock().unwrap().clone()

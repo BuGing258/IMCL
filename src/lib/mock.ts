@@ -142,11 +142,14 @@ export const mockVersions: GameVersion[] = [
 
 /* ---------- 资源市场：Mod / 光影 / 材质包 ---------- */
 export type ResKind = "mod" | "shader" | "resourcepack";
+/** Mod 页能搜的类型：版本里的三种资源 + 整合包 */
+export type MarketKind = ResKind | "modpack";
 
-export const RES_LABELS: Record<ResKind, string> = {
+export const RES_LABELS: Record<MarketKind, string> = {
   mod: "Mod",
   shader: "光影",
   resourcepack: "材质包",
+  modpack: "整合包",
 };
 
 export const RES_CATEGORIES: Record<ResKind, string[]> = {
@@ -157,7 +160,7 @@ export const RES_CATEGORIES: Record<ResKind, string[]> = {
 
 export interface MarketItem {
   id: string;
-  kind: ResKind;
+  kind: MarketKind;
   name: string;
   author: string;
   desc: string;
@@ -193,6 +196,10 @@ export const mockMarket: MarketItem[] = [
   { id: "stay-true", kind: "resourcepack", name: "Stay True", author: "haha_yes", desc: "保持原版质感的细节增强", downloads: 3_800_000, category: "原版风", color: "#888780" },
   { id: "better-leaves", kind: "resourcepack", name: "Better Leaves", author: "Motschen", desc: "让树叶看起来更茂密", downloads: 5_600_000, category: "原版风", color: "#3B6D11" },
   { id: "default-dark-mode", kind: "resourcepack", name: "Default Dark Mode", author: "nebulr", desc: "把游戏界面换成深色", downloads: 4_900_000, category: "界面", color: "#444441" },
+  // 整合包
+  { id: "fabulously-optimized", kind: "modpack", name: "Fabulously Optimized", author: "robotkoer", desc: "装好就能玩的优化整合包，帧率更高、画面更好", downloads: 9_600_000, category: "优化", color: "#1D9E75" },
+  { id: "cobblemon-pack", kind: "modpack", name: "Cobblemon Official Modpack", author: "Cobblemon", desc: "宝可梦风格的冒险整合包", downloads: 4_300_000, category: "冒险", color: "#E24B4A" },
+  { id: "create-above", kind: "modpack", name: "Create: Above and Beyond", author: "simibubi", desc: "围绕机械动力的科技任务整合包", downloads: 2_100_000, category: "科技", color: "#BA7517" },
   { id: "xali-books", kind: "resourcepack", name: "Xali 附魔书", author: "Xali", desc: "不同附魔的书显示不同颜色", downloads: 2_700_000, category: "界面", color: "#993556" },
 ];
 

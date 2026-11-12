@@ -8,6 +8,7 @@ use tauri::{AppHandle, State};
 
 use crate::auth;
 use crate::game::{self, installed, launch, meta};
+use crate::modpack;
 use crate::modrinth;
 use crate::skin;
 use crate::java::{self, JavaInfo};
@@ -60,6 +61,19 @@ pub async fn optifine_versions(mc: String) -> CmdResult<Vec<meta::OptiFineVersio
 #[tauri::command]
 pub async fn find_java() -> Vec<JavaInfo> {
     tauri::async_runtime::spawn_blocking(java::find_all).await.unwrap_or_default()
+}
+
+/// 安装 Modrinth 整合包，进度和普通安装一样走 `install-progress`
+#[tauri::command]
+pub async fn install_modpack(app: AppHandle, installs: State<'_, Installs>, req: modpack::ModpackReq) -> CmdResult<()> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    installs.0.lock().unwrap().insert(req.task_id.clone(), Arc::clone(&cancel));
+    let ctx = TaskCtx::new(req.task_id.clone(), cancel, modpack::STAGES);
+    ctx.spawn_reporter(app, "install-progress");
+    let result = modpack::install(&ctx, &req).await;
+    ctx.finish();
+    installs.0.lock().unwrap().remove(&req.task_id);
+    result.map_err(err)
 }
 
 #[tauri::command]
@@ -120,6 +134,11 @@ pub async fn modrinth_search(req: modrinth::SearchReq) -> CmdResult<modrinth::Se
 #[tauri::command]
 pub async fn modrinth_versions(req: modrinth::VersionsReq) -> CmdResult<Vec<modrinth::ModVersion>> {
     modrinth::versions(&req).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn modrinth_deps(req: modrinth::DepsReq) -> CmdResult<Vec<modrinth::Dep>> {
+    modrinth::deps(&req).await.map_err(err)
 }
 
 #[tauri::command]

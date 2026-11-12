@@ -2,7 +2,7 @@
 // 已接后端：系统状态、下载安装、已安装版本。其余（Mod 市场、启动游戏、账户登录）仍是前端模拟。
 import { listen } from "@tauri-apps/api/event";
 import { api, isTauri, type GameExit, type InstallRequest, type MsAccountInfo, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
-import { mockPacks, packLook, type Loader, type Pack, type ResKind } from "./mock";
+import { mockPacks, packLook, type Loader, type Pack, type ResKind, type MarketKind } from "./mock";
 
 export { isTauri };
 
@@ -45,7 +45,7 @@ class Nav {
 export const nav = new Nav();
 
 /** 跨页面共享的小状态，比如从版本管理跳到 Mod 页时预先选好“光影”标签 */
-export const ui = $state<{ resKind: ResKind; resQuery: string }>({ resKind: "mod", resQuery: "" });
+export const ui = $state<{ resKind: MarketKind; resQuery: string }>({ resKind: "mod", resQuery: "" });
 
 /* ---------- localStorage 小工具 ---------- */
 function load<T>(key: string, fallback: T): T {
@@ -86,6 +86,8 @@ export interface Settings {
   extraJavas: JavaInfo[];
   /** 微软登录用的 Azure 应用 Client ID */
   msClientId: string;
+  /** 安装 Mod 时自动装前置 */
+  autoDeps: boolean;
 }
 
 export interface GameDir {
@@ -107,6 +109,7 @@ export const settings = $state<Settings>(
     jvmArgs: "",
     msClientId: "",
     extraJavas: [],
+    autoDeps: true,
   }),
 );
 
@@ -528,6 +531,8 @@ export interface InstallTask {
   speed: number;
   status: "running" | "error" | "cancelling";
   error?: string;
+  /** 整合包安装：Modrinth 项目号 */
+  modpack?: string;
 }
 
 export interface InstallOptions {
@@ -626,9 +631,72 @@ class Installs {
     if (isTauri()) api.cancel(id);
   }
 
+  /** 某个整合包正在进行（或失败待处理）的安装 */
+  forModpack(projectId: string) {
+    return Object.values(this.tasks).find((t) => t.modpack === projectId);
+  }
+
+  /** 安装整合包：新建一个游戏版本，装好游戏、加载器和整合包里的文件 */
+  startModpack(opt: { name: string; mc: string; loader: string | null; projectId: string; versionId: string; title: string }) {
+    const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    this.tasks[id] = {
+      id,
+      mc: opt.mc,
+      name: opt.name,
+      modpack: opt.projectId,
+      stage: "准备中",
+      stageIndex: 0,
+      stageCount: opt.loader ? 8 : 7,
+      done: 0,
+      total: 0,
+      speed: 0,
+      status: "running",
+    };
+    if (!isTauri()) {
+      const kind = opt.loader ? (opt.loader[0].toUpperCase() + opt.loader.slice(1)).replace("Neoforge", "NeoForge") : null;
+      return this.#simulate(id, { mc: opt.mc, name: opt.name, loader: kind ? ({ kind } as InstallOptions["loader"]) : null, optifine: null } as InstallOptions, [
+        "下载整合包",
+        "获取版本信息",
+        "下载游戏本体和依赖库",
+        "下载资源文件",
+        ...(kind ? [`安装 ${kind}`] : []),
+        "写入版本配置",
+        "下载整合包里的 Mod",
+        "解压整合包配置",
+      ]);
+    }
+    this.#listen();
+    api
+      .installModpack({
+        taskId: id,
+        gameDir: settings.gameDir,
+        name: opt.name,
+        projectId: opt.projectId,
+        versionId: opt.versionId,
+        source: settings.source,
+        threads: settings.threads,
+      })
+      .then(async () => {
+        delete this.tasks[id];
+        await library.refresh();
+        library.currentId = opt.name;
+        toast.show(`${opt.title} 装好了，在版本管理里叫「${opt.name}」`);
+      })
+      .catch((e) => {
+        const msg = String(e);
+        if (msg.includes("已取消")) {
+          delete this.tasks[id];
+          toast.show(`已取消安装 ${opt.title}`);
+        } else {
+          const t = this.tasks[id];
+          if (t) Object.assign(t, { status: "error", error: msg });
+        }
+      });
+  }
+
   /** 浏览器预览：假进度 */
-  #simulate(id: string, opt: InstallOptions) {
-    const stages = ["获取版本信息", "下载游戏本体和依赖库", "下载资源文件", ...(opt.loader ? [`安装 ${opt.loader.kind}`] : []), ...(opt.optifine ? ["安装 OptiFine"] : []), "写入版本配置"];
+  #simulate(id: string, opt: InstallOptions, custom?: string[]) {
+    const stages = custom ?? ["获取版本信息", "下载游戏本体和依赖库", "下载资源文件", ...(opt.loader ? [`安装 ${opt.loader.kind}`] : []), ...(opt.optifine ? ["安装 OptiFine"] : []), "写入版本配置"];
     let i = 0;
     let done = 0;
     const timer = setInterval(() => {

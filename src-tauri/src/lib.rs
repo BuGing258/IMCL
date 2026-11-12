@@ -3,6 +3,7 @@ mod commands;
 pub mod game;
 pub mod java;
 pub mod maven;
+pub mod modpack;
 pub mod modrinth;
 pub mod net;
 pub mod skin;
@@ -41,6 +42,8 @@ pub fn run() {
             commands::set_version_settings,
             commands::modrinth_search,
             commands::modrinth_versions,
+            commands::modrinth_deps,
+            commands::install_modpack,
             commands::modrinth_install,
             commands::modrinth_identify,
             commands::ms_login,

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fade } from "svelte/transition";
-  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX } from "@lucide/svelte";
+  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search } from "@lucide/svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import PackCover from "$lib/components/PackCover.svelte";
   import Select from "$lib/components/Select.svelte";
@@ -34,6 +34,20 @@
   function resName(kind: ResKind, id: string) {
     return sel?.projects?.[`${dirName(kind)}/${id}`]?.title ?? marketName(id).replace(/\.zip$/i, "");
   }
+  /* ---------- 搜索当前标签里的 Mod / 光影 / 材质包 ---------- */
+  let q = $state("");
+  // 换版本或换标签时清空
+  $effect(() => {
+    void [sel?.id, tab];
+    q = "";
+  });
+  const needle = $derived(q.trim().toLowerCase());
+  const hitText = (...parts: (string | null | undefined)[]) => parts.some((s) => !!s && s.toLowerCase().includes(needle));
+  const shownMods = $derived(!sel ? [] : needle ? sel.mods.filter((m) => hitText(m.name, m.id, m.version)) : sel.mods);
+  function shownRes(kind: ResKind, ids: string[]) {
+    return needle ? ids.filter((id) => hitText(resName(kind, id), id)) : ids;
+  }
+
   const listKey = (k: ResKind) => (k === "shader" ? "shaders" : "resourcepacks") as "shaders" | "resourcepacks";
   const dirName = (k: ResKind) => (k === "mod" ? "mods" : k === "shader" ? "shaderpacks" : "resourcepacks");
 
@@ -226,6 +240,13 @@
             </div>
             {#if tab !== "settings"}
               <div class="tabs-actions">
+                {#if counts[tab] > 0}
+                  <label class="find">
+                    <Search size={14} />
+                    <input class="input" placeholder="搜索{RES_LABELS[tab]}" bind:value={q} spellcheck="false" aria-label="搜索{RES_LABELS[tab]}" />
+                    {#if q}<button class="clear" onclick={() => (q = "")} aria-label="清空搜索"><X size={12} /></button>{/if}
+                  </label>
+                {/if}
                 {#if sel.real}
                   <button class="btn btn-sm btn-icon" onclick={reload} aria-label="重新读取" title="重新读取文件夹"><RefreshCw size={14} /></button>
                 {/if}
@@ -249,7 +270,7 @@
                 <div class="tr th">
                   <span>#</span><span>Mod</span><span>版本</span><span>大小</span><span class="r">启用 {enabled}/{sel.mods.length}</span>
                 </div>
-                {#each sel.mods as m, k (m.id)}
+                {#each shownMods as m, k (m.id)}
                   <div class="tr" class:off={!m.enabled}>
                     <span class="faint">{k + 1}</span>
                     <span class="name" title={m.id}>{m.name}</span>
@@ -266,6 +287,8 @@
                       ></button>
                     </span>
                   </div>
+                {:else}
+                  <p class="no-match">没有名字里带「{q.trim()}」的 Mod</p>
                 {/each}
               </div>
             {:else}
@@ -283,7 +306,7 @@
             {@const key = listKey(tab)}
             {#if sel[key].length}
               <div class="res-list">
-                {#each sel[key] as id (id)}
+                {#each shownRes(tab as ResKind, sel[key]) as id (id)}
                   {@const confirming = confirmKey === `${tab}:${id}`}
                   <div class="res">
                     <span class="res-ic">{#if tab === "shader"}<Sun size={16} />{:else}<Image size={16} />{/if}</span>
@@ -299,6 +322,8 @@
                       {#if confirming}{sel.real ? "确认移到回收站" : "确认移除"}{:else}<X size={14} />{/if}
                     </button>
                   </div>
+                {:else}
+                  <p class="no-match">没有名字里带「{q.trim()}」的{RES_LABELS[tab]}</p>
                 {/each}
               </div>
             {:else}
@@ -470,7 +495,46 @@
   }
   .tabs-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
+  }
+  .find {
+    position: relative;
+    display: flex;
+    align-items: center;
+    color: var(--text-3);
+  }
+  .find > :global(svg) {
+    position: absolute;
+    left: 9px;
+    pointer-events: none;
+  }
+  .find .input {
+    width: 170px;
+    height: 30px;
+    padding-left: 30px;
+    padding-right: 24px;
+    font-size: 12.5px;
+  }
+  .clear {
+    position: absolute;
+    right: 6px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--text-3);
+  }
+  .clear:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .no-match {
+    padding: 24px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-3);
   }
   .seg :global(.tab-ic) {
     vertical-align: -2px;

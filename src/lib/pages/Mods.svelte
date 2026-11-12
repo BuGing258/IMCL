@@ -1,20 +1,33 @@
 <script lang="ts">
-  import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw } from "@lucide/svelte";
+  import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw, Package, X } from "@lucide/svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
   import ResVersionPicker from "$lib/components/ResVersionPicker.svelte";
-  import { library, toast, ui, nav, fmtCount, isTauri, settings } from "$lib/state.svelte";
-  import { RES_LABELS, type ResKind } from "$lib/mock";
-  import { api, type Hit, type ModVersion } from "$lib/api";
+  import { library, toast, ui, nav, fmtCount, isTauri, settings, installs } from "$lib/state.svelte";
+  import { RES_LABELS, type MarketKind } from "$lib/mock";
+  import { api, type Hit, type ModVersion, type ResDep } from "$lib/api";
 
-  const KINDS: { k: ResKind; icon: typeof Puzzle }[] = [
+  const KINDS: { k: MarketKind; icon: typeof Puzzle }[] = [
     { k: "mod", icon: Puzzle },
     { k: "shader", icon: Sun },
     { k: "resourcepack", icon: Image },
+    { k: "modpack", icon: Package },
   ];
 
   /** Modrinth 分类 → 中文 */
-  const CATS: Record<ResKind, [string, string][]> = {
+  const CATS: Record<MarketKind, [string, string][]> = {
+    modpack: [
+      ["optimization", "优化"],
+      ["adventure", "冒险"],
+      ["technology", "科技"],
+      ["magic", "魔法"],
+      ["quests", "任务"],
+      ["multiplayer", "多人"],
+      ["lightweight", "轻量"],
+      ["kitchen-sink", "大杂烩"],
+      ["challenging", "挑战"],
+      ["combat", "战斗"],
+    ],
     mod: [
       ["optimization", "优化"],
       ["utility", "实用"],
@@ -96,14 +109,15 @@
   let installing = $state<Record<string, boolean>>({});
   /** 刚装上的（识别结果回来之前先当作已安装），值是版本号 */
   let justInstalled = $state<Record<string, string>>({});
-  /** 正在选版本的资源 */
-  let picking = $state<Hit | null>(null);
+  /** 打开的版本选择窗口（给前置选版本时会叠在上面） */
+  let stack = $state<{ hit: Hit; kind: MarketKind; installed?: string | null }[]>([]);
 
   const pack = $derived(library.current);
   const isMod = $derived(ui.resKind === "mod");
+  const isPack = $derived(ui.resKind === "modpack");
   const hasIris = $derived(!!pack && pack.mods.some((m) => m.enabled && /iris/i.test(m.id + m.name)));
   const shaderReady = $derived(!!pack && (!!pack.optifine || hasIris));
-  const canInstall = $derived(!!pack && (!isMod || pack.loader !== "原版"));
+  const canInstall = $derived(isPack || (!!pack && (!isMod || pack.loader !== "原版")));
 
   /** 光影按 Iris / OptiFine 过滤；Mod 按加载器过滤 */
   const loaderFilter = $derived.by(() => {
@@ -115,6 +129,7 @@
 
   const installedIds = $derived(new Set(Object.values(pack?.projects ?? {}).map((p) => p.projectId)));
   function has(h: Hit) {
+    if (isPack) return false;
     if (justInstalled[`${pack?.id}:${h.id}`] != null) return true;
     if (installedIds.has(h.id)) return true;
     // 浏览器预览的演示数据按名字判断
@@ -140,8 +155,9 @@
       const r = await api.searchResources({
         kind: ui.resKind,
         query: translate(ui.resQuery),
-        mc: pack?.mc ?? null,
-        loader: loaderFilter,
+        // 整合包自己决定游戏版本，不按当前版本过滤
+        mc: isPack ? null : (pack?.mc ?? null),
+        loader: isPack ? null : loaderFilter,
         category: cat || null,
         sort,
         offset: append ? hits.length : 0,
@@ -165,35 +181,72 @@
     return () => clearTimeout(timer);
   });
 
-  function setKind(k: ResKind) {
+  function setKind(k: MarketKind) {
     if (ui.resKind === k) return;
     ui.resKind = k;
     cat = "";
     hits = [];
   }
 
-  /** 已安装的版本号：空字符串 = 装了但不知道版本，null = 没装 */
+  /** 某个项目在当前版本里装的版本号：空字符串 = 装了但不知道版本，null = 没装 */
+  function installedOf(projectId: string): string | null {
+    const just = justInstalled[`${pack?.id}:${projectId}`];
+    if (just != null) return just;
+    const f = Object.values(pack?.projects ?? {}).find((p) => p.projectId === projectId);
+    return f ? f.versionNumber : null;
+  }
+
+  /** 卡片上的资源装的版本号（演示数据按名字判断，版本未知） */
   function installedVersion(h: Hit): string | null {
     if (!has(h)) return null;
-    const just = justInstalled[`${pack?.id}:${h.id}`];
-    if (just) return just;
-    const f = Object.values(pack?.projects ?? {}).find((p) => p.projectId === h.id);
-    return f?.versionNumber ?? "";
+    return installedOf(h.id) ?? "";
   }
 
-  const apiLoader = (kind: ResKind) => (kind === "mod" ? (pack?.loader ?? null) : loaderFilter);
+  const apiLoader = (kind: MarketKind) => (kind === "mod" ? (pack?.loader ?? null) : kind === "shader" ? loaderFilter : null);
 
-  function openPicker(h: Hit) {
-    if (!pack || !canInstall || installing[h.id]) return;
-    picking = h;
+  function openPicker(h: Hit, kind: MarketKind = ui.resKind, installed?: string | null) {
+    if (installing[h.id] || stack.some((x) => x.hit.id === h.id)) return;
+    if (kind !== "modpack" && (!pack || !canInstall)) return;
+    const task = installs.forModpack(h.id);
+    if (task?.status === "error") installs.cancel(task.id); // 失败的先清掉，重新来
+    stack.push({ hit: h, kind, installed });
   }
 
-  async function install(h: Hit, v: ModVersion) {
-    picking = null;
-    if (!pack || !canInstall || installing[h.id]) return;
+  const closePicker = (id: string) => (stack = stack.filter((x) => x.hit.id !== id));
+
+  /** 给前置选版本：在当前窗口上面再开一个 */
+  function pickDep(d: ResDep, installed: string | null) {
+    openPicker(
+      { id: d.projectId, slug: d.projectId, title: d.title, author: "", description: "", downloads: 0, icon: d.icon, categories: [], color: null },
+      "mod",
+      installed,
+    );
+  }
+
+  function installModpack(h: Hit, v: ModVersion, name: string) {
+    closePicker(h.id);
+    installs.startModpack({
+      name,
+      mc: v.gameVersions[0] ?? "",
+      loader: v.loaders.find((l) => l !== "minecraft") ?? null,
+      projectId: h.id,
+      versionId: v.id,
+      title: h.title,
+    });
+    toast.show(`开始安装 ${h.title}，完成后会出现在版本管理里`);
+  }
+
+  /** 整合包安装进度（0~100） */
+  function packPct(t: { stageIndex: number; stageCount: number; done: number; total: number }) {
+    const part = t.total ? t.done / t.total : 0;
+    return Math.min(99, Math.floor(((Math.max(1, t.stageIndex) - 1 + part) / Math.max(1, t.stageCount)) * 100));
+  }
+
+  async function install(h: Hit, v: ModVersion, withDeps = true, kind: MarketKind = ui.resKind) {
+    closePicker(h.id);
+    if (!pack || installing[h.id]) return;
     const target = pack;
-    const kind = ui.resKind;
-    const reinstall = has(h);
+    const reinstall = installedOf(h.id) != null || has(h);
     installing[h.id] = true;
     try {
       const r = await api.installResource({
@@ -205,6 +258,7 @@
         loader: apiLoader(kind),
         versionId: v.id,
         reinstall,
+        withDeps,
       });
       justInstalled[`${target.id}:${h.id}`] = r.versionNumber;
       let msg = reinstall ? `已把 ${h.title} 重新安装为 ${r.versionNumber}` : `已把 ${h.title} ${r.versionNumber} 装进 ${target.name}`;
@@ -223,6 +277,18 @@
     }
   }
 
+  /** 已安装标签展开后最多这么宽，版本号放不下就来回滚动 */
+  const VER_MAX = 120;
+  function measureVersion(e: MouseEvent) {
+    const ver = (e.currentTarget as HTMLElement).querySelector<HTMLElement>(".ver");
+    const text = ver?.firstElementChild as HTMLElement | null;
+    if (!ver || !text) return;
+    const over = text.scrollWidth - VER_MAX;
+    ver.classList.toggle("over", over > 0);
+    ver.style.setProperty("--shift", `${-Math.max(0, over)}px`);
+    ver.style.setProperty("--dur", `${Math.max(1.2, over / 30)}s`);
+  }
+
   function openPage(h: Hit) {
     const url = `https://modrinth.com/${ui.resKind}/${h.slug}`;
     if (isTauri()) openUrl(url).catch((e) => toast.show(String(e)));
@@ -237,28 +303,46 @@
   const hex = (c: number | null) => (c == null ? "#888780" : `#${c.toString(16).padStart(6, "0")}`);
 </script>
 
-{#if picking && pack}
-  {@const h = picking}
-  <ResVersionPicker
-    hit={h}
-    kind={ui.resKind}
-    mc={pack.mc}
-    loader={apiLoader(ui.resKind)}
-    target={pack.name}
-    installedVersion={installedVersion(h)}
-    onclose={() => (picking = null)}
-    onpick={(v) => install(h, v)}
-  />
-{/if}
+{#each stack as { hit: h, kind, installed }, i (h.id)}
+  {#if kind === "modpack"}
+    <ResVersionPicker
+      hit={h}
+      {kind}
+      mc=""
+      loader={null}
+      target=""
+      gameDir={settings.gameDir}
+      active={i === stack.length - 1}
+      onclose={() => closePicker(h.id)}
+      onpick={(v, _deps, name) => installModpack(h, v, name ?? h.title)}
+    />
+  {:else if pack}
+    <ResVersionPicker
+      hit={h}
+      {kind}
+      mc={pack.mc}
+      loader={apiLoader(kind)}
+      target={pack.name}
+      gameDir={settings.gameDir}
+      installedVersion={i === 0 ? installedVersion(h) : (installedOf(h.id) ?? installed ?? null)}
+      {installedOf}
+      busyOf={(id) => !!installing[id]}
+      active={i === stack.length - 1}
+      onclose={() => closePicker(h.id)}
+      onpick={(v, withDeps) => install(h, v, withDeps, kind)}
+      onpickdep={pickDep}
+    />
+  {/if}
+{/each}
 
 <div class="page-scroll">
   <div class="wrap">
     <div class="page-head">
       <div>
         <h1>Mod</h1>
-        <p>Mod、光影、材质包都从 Modrinth 下载，会自动装上需要的前置</p>
+        <p>Mod、光影、材质包、整合包都从 Modrinth 下载，会自动装上需要的前置</p>
       </div>
-      {#if pack}
+      {#if pack && !isPack}
         <label class="target">
           <span class="muted">安装到</span>
           <Select
@@ -279,7 +363,9 @@
       {/each}
     </div>
 
-    {#if !pack}
+    {#if isPack}
+      <!-- 整合包会新建版本，不需要先选版本 -->
+    {:else if !pack}
       <div class="warn">
         <Info size={16} />
         <span>还没有安装任何版本，先去下载一个游戏版本。</span>
@@ -327,7 +413,9 @@
       />
     </div>
 
-    {#if pack}
+    {#if isPack}
+      <p class="filter-note">整合包会装成一个新的游戏版本，游戏、加载器和 Mod 都自动装好{total ? ` · 共 ${fmtCount(total)} 个` : ""}</p>
+    {:else if pack}
       <p class="filter-note">
         只显示适合 {pack.mc}{isMod && pack.loader !== "原版" ? ` ${pack.loader}` : ""}{loaderFilter && !isMod
           ? `（${loaderFilter === "iris" ? "Iris" : "OptiFine"}）`
@@ -359,7 +447,10 @@
               <div class="mt-meta">
                 {#if installed}
                   {@const iv = installedVersion(h)}
-                  <span class="badge green inst" title={iv ? `已安装 ${iv}` : "已安装"}><Check size={11} /><span class="iv">已安装{iv ? ` ${iv}` : ""}</span></span>
+                  <span class="badge green inst" role="note" aria-label={iv ? `已安装 ${iv}` : "已安装"} onmouseenter={measureVersion}>
+                    <Check size={11} />已安装
+                    {#if iv}<span class="ver"><span class="ver-t">{iv}</span></span>{/if}
+                  </span>
                 {/if}
                 {#each h.categories.filter((c) => CAT_ZH[c]).slice(0, 2) as c}
                   <span class="badge gray">{CAT_ZH[c]}</span>
@@ -368,7 +459,20 @@
               </div>
             </div>
             <div class="ma">
-              {#if installing[h.id]}
+              {#if isPack}
+                {@const task = installs.forModpack(h.id)}
+                {#if task?.status === "error"}
+                  <button class="btn btn-sm fail" onclick={() => openPicker(h)} title={task.error}>安装失败，重试</button>
+                {:else if task}
+                  <span class="pk-run" title={task.stage}>
+                    <span class="pk-bar"><i style:width="{packPct(task)}%"></i></span>
+                    <span class="pk-pct">{packPct(task)}%</span>
+                    <button class="btn btn-sm btn-icon" onclick={() => installs.cancel(task.id)} disabled={task.status === "cancelling"} aria-label="取消安装" title="取消安装"><X size={13} /></button>
+                  </span>
+                {:else}
+                  <button class="btn btn-sm" onclick={() => openPicker(h)}>安装</button>
+                {/if}
+              {:else if installing[h.id]}
                 <button class="btn btn-sm" disabled><LoaderCircle size={14} class="spin" />安装中</button>
               {:else if installed}
                 <button class="btn btn-sm" disabled={!canInstall} onclick={() => openPicker(h)} title="换个版本或重新下载">重新安装</button>
@@ -380,7 +484,7 @@
         {:else}
           {#if !loading}
             <p class="none">
-              {ui.resQuery ? `没找到「${ui.resQuery}」，试试英文名` : `没有适合这个版本的${RES_LABELS[ui.resKind]}`}
+              {ui.resQuery ? `没找到「${ui.resQuery}」，试试英文名` : isPack ? "没有找到整合包" : `没有适合这个版本的${RES_LABELS[ui.resKind]}`}
             </p>
           {/if}
         {/each}
@@ -407,7 +511,7 @@
   }
   .kinds {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px;
     margin-bottom: 14px;
   }
@@ -581,15 +685,71 @@
   .ma {
     flex-shrink: 0;
   }
+  .fail {
+    color: var(--red);
+    border-color: var(--red);
+  }
+  .pk-run {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pk-bar {
+    width: 64px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--hover);
+    overflow: hidden;
+  }
+  .pk-bar i {
+    display: block;
+    height: 100%;
+    background: var(--red);
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .pk-pct {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
+    min-width: 30px;
+    text-align: right;
+  }
   .mt-meta .badge {
     flex-shrink: 0;
   }
-  .inst {
-    max-width: 160px;
-  }
-  .iv {
+  /* 已安装：平时只显示“已安装”，鼠标移上去展开版本号，太长就来回滚动 */
+  .ver {
+    display: inline-block;
+    max-width: 0;
+    margin-left: -4px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-weight: 500;
+    transition:
+      max-width 0.25s var(--ease),
+      margin-left 0.25s var(--ease);
+  }
+  .inst:hover .ver {
+    max-width: 120px;
+    margin-left: 0;
+  }
+  .ver-t {
+    display: inline-block;
+  }
+  .inst:hover .ver:global(.over) .ver-t {
+    animation: ver-scroll var(--dur) ease-in-out 0.6s infinite alternate;
+  }
+  @keyframes ver-scroll {
+    0%,
+    15% {
+      transform: translateX(0);
+    }
+    85%,
+    100% {
+      transform: translateX(var(--shift));
+    }
   }
   .none {
     grid-column: 1 / -1;

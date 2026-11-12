@@ -269,6 +269,89 @@ pub struct InstallReq {
     /// 已经装了也重新装（替换旧文件）
     #[serde(default)]
     pub reinstall: bool,
+    /// 自动装必需的前置（默认开）
+    #[serde(default = "yes")]
+    pub with_deps: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// 依赖条目对应的项目号（有的只给了版本号没给项目号）
+async fn dep_project_id(d: &Value) -> Option<String> {
+    match (d["project_id"].as_str(), d["version_id"].as_str()) {
+        (Some(p), _) => Some(p.to_string()),
+        (None, Some(vid)) => get::<Value>(&format!("/version/{vid}"), &[]).await.ok()?["project_id"].as_str().map(str::to_string),
+        _ => None,
+    }
+    .filter(|p| !p.is_empty())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepsReq {
+    pub game_dir: String,
+    pub version: String,
+    pub kind: String,
+    /// 选中的资源版本
+    pub version_id: String,
+    pub mc: String,
+    pub loader: Option<String>,
+}
+
+/// 选中的版本需要的一个前置
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dep {
+    pub project_id: String,
+    pub title: String,
+    pub icon: Option<String>,
+    /// 这个游戏版本里已经装了
+    pub installed: bool,
+    /// 有适合这个游戏版本的文件
+    pub available: bool,
+}
+
+/// 列出选中版本的必需前置（只列直接依赖；自动安装时会继续往下找）
+pub async fn deps(req: &DepsReq) -> Result<Vec<Dep>> {
+    let loaders = loaders_for(&req.kind, req.loader.as_deref())?;
+    let v: Value = get(&format!("/version/{}", req.version_id), &[]).await?;
+    let self_id = v["project_id"].as_str().unwrap_or_default().to_string();
+    let mut ids: Vec<String> = Vec::new();
+    for d in v["dependencies"].as_array().into_iter().flatten() {
+        if d["dependency_type"] != "required" {
+            continue;
+        }
+        if let Some(p) = dep_project_id(d).await {
+            if p != self_id && !ids.contains(&p) {
+                ids.push(p);
+            }
+        }
+    }
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let projects: Vec<Value> = get("/projects", &[("ids", json!(ids).to_string())]).await?;
+    let installed: HashSet<String> = identify(&PathBuf::from(&req.game_dir), &req.version)
+        .await
+        .map(|m| m.into_values().map(|f| f.project_id).collect())
+        .unwrap_or_default();
+    let avail = futures_util::future::join_all(ids.iter().map(|p| pick_version(p, &req.mc, &loaders))).await;
+    Ok(ids
+        .iter()
+        .zip(avail)
+        .map(|(id, a)| {
+            let p = projects.iter().find(|p| p["id"].as_str() == Some(id.as_str()));
+            Dep {
+                project_id: id.clone(),
+                title: p.and_then(|p| p["title"].as_str()).unwrap_or(id).to_string(),
+                icon: p.and_then(|p| p["icon_url"].as_str()).filter(|x| !x.is_empty()).map(str::to_string),
+                installed: installed.contains(id),
+                available: matches!(a, Ok(Some(_))),
+            }
+        })
+        .collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -287,7 +370,11 @@ pub struct InstallResult {
 
 /// 这个项目适合这个游戏版本和加载器的全部版本（新的在前）
 async fn list_versions(project: &str, mc: &str, loaders: &[String]) -> Result<Vec<Value>> {
-    let mut q = vec![("game_versions", json!([mc]).to_string())];
+    // 整合包不按游戏版本过滤（整合包自己决定用哪个版本）
+    let mut q = vec![];
+    if !mc.is_empty() {
+        q.push(("game_versions", json!([mc]).to_string()));
+    }
     if !loaders.is_empty() {
         q.push(("loaders", json!(loaders).to_string()));
     }
@@ -327,11 +414,15 @@ pub struct ModVersion {
     pub downloads: u64,
     pub file: String,
     pub size: u64,
+    /// 支持的游戏版本和加载器（整合包用来显示）
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
 }
 
 pub async fn versions(req: &VersionsReq) -> Result<Vec<ModVersion>> {
     let loaders = loaders_for(&req.kind, req.loader.as_deref())?;
     let list = list_versions(&req.project_id, &req.mc, &loaders).await?;
+    let strs = |v: &Value| -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default() };
     Ok(list
         .iter()
         .filter_map(|v| {
@@ -345,6 +436,8 @@ pub async fn versions(req: &VersionsReq) -> Result<Vec<ModVersion>> {
                 downloads: v["downloads"].as_u64().unwrap_or(0),
                 file: f["filename"].as_str().unwrap_or_default().to_string(),
                 size: f["size"].as_u64().unwrap_or(0),
+                game_versions: strs(&v["game_versions"]),
+                loaders: strs(&v["loaders"]),
             })
         })
         .collect())
@@ -360,7 +453,17 @@ async fn pick_version(project: &str, mc: &str, loaders: &[String]) -> Result<Opt
         .cloned())
 }
 
-fn primary_file(v: &Value) -> Option<&Value> {
+/// cdn.modrinth.com 的地址换成国内镜像
+pub fn mirror_cdn(url: &str) -> Option<String> {
+    url.strip_prefix(CDN).map(|rest| format!("{MIRROR_CDN}{rest}"))
+}
+
+/// 读取一个版本的完整信息
+pub async fn version(id: &str) -> Result<Value> {
+    get(&format!("/version/{id}"), &[]).await
+}
+
+pub fn primary_file(v: &Value) -> Option<&Value> {
     let files = v["files"].as_array()?;
     files.iter().find(|f| f["primary"].as_bool() == Some(true)).or(files.first())
 }
@@ -429,22 +532,14 @@ pub async fn install(req: &InstallReq) -> Result<InstallResult> {
     let mut missing = Vec::new();
     let mut seen: HashSet<String> = installed_ids;
     seen.insert(req.project_id.clone());
-    let mut queue: VecDeque<Value> = VecDeque::from([root]);
+    let mut queue: VecDeque<Value> = if req.with_deps { VecDeque::from([root]) } else { VecDeque::new() };
     while let Some(v) = queue.pop_front() {
         for d in v["dependencies"].as_array().into_iter().flatten() {
             if d["dependency_type"] != "required" {
                 continue;
             }
-            // 有的只给了版本号没给项目号
-            let pid = match (d["project_id"].as_str(), d["version_id"].as_str()) {
-                (Some(p), _) => p.to_string(),
-                (None, Some(vid)) => match get::<Value>(&format!("/version/{vid}"), &[]).await {
-                    Ok(dv) => dv["project_id"].as_str().unwrap_or_default().to_string(),
-                    Err(_) => continue,
-                },
-                _ => continue,
-            };
-            if pid.is_empty() || !seen.insert(pid.clone()) || deps.len() + missing.len() > 30 {
+            let Some(pid) = dep_project_id(d).await else { continue };
+            if !seen.insert(pid.clone()) || deps.len() + missing.len() > 30 {
                 continue;
             }
             let dep_title = get::<Value>(&format!("/project/{pid}"), &[])
@@ -526,7 +621,30 @@ mod tests {
             loader: Some("Fabric".into()),
             version_id,
             reinstall,
+            with_deps: true,
         };
+        // 先看前置：Iris 1.20.1 需要 Sodium
+        let first = pick_version("YL57xq9U", "1.20.1", &mod_loaders("Fabric")).await.unwrap().unwrap();
+        let ds = deps(&DepsReq {
+            game_dir: root.to_string_lossy().into(),
+            version: "t".into(),
+            kind: "mod".into(),
+            version_id: first["id"].as_str().unwrap().into(),
+            mc: "1.20.1".into(),
+            loader: Some("Fabric".into()),
+        })
+        .await
+        .unwrap();
+        println!("前置：{ds:?}");
+        assert!(ds.iter().any(|d| d.title == "Sodium" && !d.installed && d.available));
+
+        // 关掉自动前置：只装 Iris
+        let mut solo = req(None, false);
+        solo.with_deps = false;
+        let r0 = install(&solo).await.unwrap();
+        assert!(r0.deps.is_empty());
+        std::fs::remove_file(installed::kind_dir(&root, "t", "mods").unwrap().join(&r0.file)).unwrap();
+
         let r = install(&req(None, false)).await.unwrap();
         println!("{r:?}");
         let ids = identify(&root, "t").await.unwrap();
