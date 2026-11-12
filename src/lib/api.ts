@@ -198,10 +198,53 @@ export interface ModpackRequest {
   taskId: string;
   gameDir: string;
   name: string;
-  projectId: string;
-  versionId: string;
+  /** 从 Modrinth 下载时填 */
+  projectId?: string;
+  versionId?: string;
+  /** 从本地 .mrpack 导入时填 */
+  file?: string | null;
   source: Source;
   threads: number;
+}
+
+/** 本地整合包里写的信息 */
+export interface PackInfo {
+  name: string;
+  version: string;
+  summary: string | null;
+  mc: string;
+  /** 比如 "Fabric 0.16.10" */
+  loader: string | null;
+  files: number;
+}
+
+/** 导出时可以选的一项（版本文件夹第一层） */
+export interface ExportEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+  files: number;
+  default: boolean;
+}
+
+export interface ExportRequest {
+  gameDir: string;
+  version: string;
+  out: string;
+  name: string;
+  packVersion: string;
+  summary?: string | null;
+  include: string[];
+}
+
+export interface ExportResult {
+  path: string;
+  /** 写成 Modrinth 下载地址的文件数 */
+  linked: number;
+  /** 直接打包进去的文件数 */
+  bundled: number;
+  size: number;
+  warnings: string[];
 }
 
 /** 已安装文件对应的 Modrinth 项目；键是 "mods/文件名" */
@@ -306,6 +349,29 @@ export const api = {
 
   install: (req: InstallRequest): Promise<void> => invoke("install_version", { req }),
   installModpack: (req: ModpackRequest): Promise<void> => invoke("install_modpack", { req }),
+  readModpack: async (path: string): Promise<PackInfo> => {
+    if (isTauri()) return invoke("read_modpack", { path });
+    await sleep(200);
+    return { name: "好友生存包", version: "1.0.0", summary: "我们服务器用的 Mod", mc: "1.20.1", loader: "Fabric 0.15.7", files: 12 };
+  },
+  exportEntries: async (gameDir: string, name: string): Promise<ExportEntry[]> => {
+    if (isTauri()) return invoke("export_entries", { gameDir, name });
+    await sleep(200);
+    return [
+      { name: "mods", isDir: true, size: 48_000_000, files: 12, default: true },
+      { name: "config", isDir: true, size: 320_000, files: 41, default: true },
+      { name: "resourcepacks", isDir: true, size: 9_800_000, files: 1, default: true },
+      { name: "options.txt", isDir: false, size: 5_200, files: 1, default: true },
+      { name: "servers.dat", isDir: false, size: 300, files: 1, default: true },
+      { name: "saves", isDir: true, size: 260_000_000, files: 820, default: false },
+      { name: "screenshots", isDir: true, size: 12_000_000, files: 9, default: false },
+    ];
+  },
+  exportModpack: async (req: ExportRequest): Promise<ExportResult> => {
+    if (isTauri()) return invoke("export_modpack", { req });
+    await sleep(900);
+    return { path: req.out, linked: 10, bundled: 46, size: 180_000, warnings: [] };
+  },
   cancel: (taskId: string): Promise<void> => invoke("cancel_install", { taskId }),
 
   listInstalled: (gameDir: string): Promise<InstalledVersion[]> => invoke("list_installed", { gameDir }),
@@ -411,6 +477,18 @@ export const api = {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const r = await open({ directory: true, title });
     return typeof r === "string" ? r : null;
+  },
+  pickMrpack: async (): Promise<string | null> => {
+    if (!isTauri()) return "C:/Users/demo/Downloads/好友生存包.mrpack";
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const r = await open({ title: "选择整合包", filters: [{ name: "Modrinth 整合包", extensions: ["mrpack", "zip"] }] });
+    return typeof r === "string" ? r : null;
+  },
+  pickSaveMrpack: async (defaultName: string): Promise<string | null> => {
+    if (!isTauri()) return `C:/Users/demo/Desktop/${defaultName}.mrpack`;
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const r = await save({ title: "导出整合包", defaultPath: `${defaultName}.mrpack`, filters: [{ name: "Modrinth 整合包", extensions: ["mrpack"] }] });
+    return r ?? null;
   },
   pickJava: async (): Promise<string | null> => {
     if (!isTauri()) return null;

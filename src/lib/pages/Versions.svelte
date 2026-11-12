@@ -5,6 +5,7 @@
   import PackCover from "$lib/components/PackCover.svelte";
   import Select from "$lib/components/Select.svelte";
   import VersionSettings from "$lib/components/VersionSettings.svelte";
+  import ExportPackDialog from "$lib/components/ExportPackDialog.svelte";
   import { library, game, nav, toast, ui, settings, gameDirs } from "$lib/state.svelte";
   import { api, fmtRelative } from "$lib/api";
   import { marketName, RES_LABELS, type Pack, type ResKind } from "$lib/mock";
@@ -13,6 +14,8 @@
   const TABS: ResKind[] = ["mod", "shader", "resourcepack"];
 
   let selId = $state(library.currentId);
+  /** 正在导出整合包的版本 */
+  let exporting = $state<Pack | null>(null);
   let tab = $state<Tab>("mod");
   let filesErr = $state("");
   let confirmKey = $state<string | null>(null);
@@ -224,7 +227,7 @@
                   </button>
                 {/if}
                 <button class="btn btn-pill" onclick={openFolder}><FolderOpen size={14} />文件夹</button>
-                <button class="btn btn-pill" onclick={() => toast.show(`导出 ${sel.name}：还没接入`)}><PackageOpen size={14} />导出</button>
+                <button class="btn btn-pill" onclick={() => (exporting = sel ?? null)} title="导出成整合包，发给朋友导入"><PackageOpen size={14} />导出</button>
               </div>
             </div>
           </div>
@@ -339,6 +342,11 @@
     {/if}
   </section>
 </div>
+
+
+{#if exporting}
+  <ExportPackDialog pack={exporting} onclose={() => (exporting = null)} />
+{/if}
 
 <style>
   .empty-page {

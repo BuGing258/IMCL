@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw, Package, X } from "@lucide/svelte";
+  import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw, Package, X, FolderInput } from "@lucide/svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
   import ResVersionPicker from "$lib/components/ResVersionPicker.svelte";
+  import ImportPackDialog from "$lib/components/ImportPackDialog.svelte";
   import { library, toast, ui, nav, fmtCount, isTauri, settings, installs } from "$lib/state.svelte";
   import { RES_LABELS, type MarketKind } from "$lib/mock";
   import { api, type Hit, type ModVersion, type ResDep } from "$lib/api";
@@ -236,6 +237,15 @@
     toast.show(`开始安装 ${h.title}，完成后会出现在版本管理里`);
   }
 
+  /* ---------- 从本地文件导入整合包 ---------- */
+  let importFile = $state<string | null>(null);
+  const fileTasks = $derived(Object.values(installs.tasks).filter((t) => t.modpack?.startsWith("file:")));
+
+  async function pickPackFile() {
+    const f = await api.pickMrpack();
+    if (f) importFile = f;
+  }
+
   /** 整合包安装进度（0~100） */
   function packPct(t: { stageIndex: number; stageCount: number; done: number; total: number }) {
     const part = t.total ? t.done / t.total : 0;
@@ -302,6 +312,10 @@
 
   const hex = (c: number | null) => (c == null ? "#888780" : `#${c.toString(16).padStart(6, "0")}`);
 </script>
+
+{#if importFile}
+  <ImportPackDialog file={importFile} onclose={() => (importFile = null)} />
+{/if}
 
 {#each stack as { hit: h, kind, installed }, i (h.id)}
   {#if kind === "modpack"}
@@ -414,7 +428,25 @@
     </div>
 
     {#if isPack}
-      <p class="filter-note">整合包会装成一个新的游戏版本，游戏、加载器和 Mod 都自动装好{total ? ` · 共 ${fmtCount(total)} 个` : ""}</p>
+      <div class="pack-bar">
+        <p class="filter-note">整合包会装成一个新的游戏版本，游戏、加载器和 Mod 都自动装好{total ? ` · 共 ${fmtCount(total)} 个` : ""}</p>
+        <button class="btn btn-sm" onclick={pickPackFile} title="导入朋友发来的 .mrpack 整合包"><FolderInput size={14} />从文件导入</button>
+      </div>
+      {#each fileTasks as t (t.id)}
+        <div class="file-task" class:bad={t.status === "error"}>
+          <Package size={15} />
+          <span class="ft-name">导入 {t.name}</span>
+          {#if t.status === "error"}
+            <span class="ft-err" title={t.error}>失败：{t.error}</span>
+            <button class="btn btn-sm btn-icon" onclick={() => installs.cancel(t.id)} aria-label="关闭" title="关闭"><X size={13} /></button>
+          {:else}
+            <span class="ft-stage">{t.stage}</span>
+            <span class="pk-bar"><i style:width="{packPct(t)}%"></i></span>
+            <span class="pk-pct">{packPct(t)}%</span>
+            <button class="btn btn-sm btn-icon" onclick={() => installs.cancel(t.id)} disabled={t.status === "cancelling"} aria-label="取消导入" title="取消导入"><X size={13} /></button>
+          {/if}
+        </div>
+      {/each}
     {:else if pack}
       <p class="filter-note">
         只显示适合 {pack.mc}{isMod && pack.loader !== "原版" ? ` ${pack.loader}` : ""}{loaderFilter && !isMod
@@ -688,6 +720,46 @@
   .fail {
     color: var(--red);
     border-color: var(--red);
+  }
+  .pack-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .pack-bar .filter-note {
+    margin-bottom: 0;
+  }
+  .file-task {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 8px 12px;
+    margin-bottom: 8px;
+    border-radius: var(--r);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  .file-task.bad {
+    border-color: var(--red);
+  }
+  .ft-name {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .ft-stage,
+  .ft-err {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ft-err {
+    color: var(--red);
   }
   .pk-run {
     display: flex;

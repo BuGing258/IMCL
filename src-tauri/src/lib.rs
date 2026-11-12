@@ -5,6 +5,7 @@ pub mod java;
 pub mod jre;
 pub mod maven;
 pub mod modpack;
+pub mod modpack_export;
 pub mod modrinth;
 pub mod net;
 pub mod skin;
@@ -50,6 +51,9 @@ pub fn run() {
             commands::modrinth_versions,
             commands::modrinth_deps,
             commands::install_modpack,
+            commands::read_modpack,
+            commands::export_entries,
+            commands::export_modpack,
             commands::modrinth_install,
             commands::modrinth_identify,
             commands::ms_login,

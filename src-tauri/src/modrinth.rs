@@ -51,7 +51,7 @@ async fn get<T: DeserializeOwned>(path: &str, query: &[(&str, String)]) -> Resul
     Err(last.context("连接 Modrinth 失败，检查一下网络"))
 }
 
-async fn post<T: DeserializeOwned>(path: &str, body: &Value) -> Result<T> {
+pub(crate) async fn post<T: DeserializeOwned>(path: &str, body: &Value) -> Result<T> {
     let mut last = anyhow!("无法连接 Modrinth");
     for base in [API, MIRROR_API] {
         match send_json(net::client().post(format!("{base}{path}")).json(body)).await {

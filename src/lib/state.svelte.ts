@@ -722,7 +722,7 @@ class Installs {
   }
 
   /** 安装整合包：新建一个游戏版本，装好游戏、加载器和整合包里的文件 */
-  startModpack(opt: { name: string; mc: string; loader: string | null; projectId: string; versionId: string; title: string }) {
+  startModpack(opt: { name: string; mc: string; loader: string | null; projectId: string; versionId: string; title: string; file?: string }) {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     this.tasks[id] = {
       id,
@@ -758,6 +758,7 @@ class Installs {
         name: opt.name,
         projectId: opt.projectId,
         versionId: opt.versionId,
+        file: opt.file ?? null,
         source: settings.source,
         threads: settings.threads,
       })

@@ -1,7 +1,7 @@
 //! Modrinth 整合包（.mrpack）安装：先装好对应的游戏版本和加载器，再下载整合包里的文件，最后解压覆盖文件。
 
 use anyhow::{anyhow, bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -18,8 +18,14 @@ pub struct ModpackReq {
     pub game_dir: String,
     /// 新版本的名字
     pub name: String,
+    /// 从 Modrinth 下载时用
+    #[serde(default)]
     pub project_id: String,
+    #[serde(default)]
     pub version_id: String,
+    /// 从本地 .mrpack 文件导入时用
+    #[serde(default)]
+    pub file: Option<String>,
     pub source: Source,
     pub threads: usize,
 }
@@ -31,6 +37,12 @@ pub const STAGES: u32 = 8;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Index {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    version_id: String,
+    #[serde(default)]
+    summary: Option<String>,
     dependencies: std::collections::HashMap<String, String>,
     #[serde(default)]
     files: Vec<IndexFile>,
@@ -116,6 +128,35 @@ fn extract_overrides(pack: &Path, run_dir: &Path) -> Result<usize> {
     Ok(n)
 }
 
+fn read_index(pack: &Path) -> Result<Index> {
+    let mut zip = zipx::open(pack)?;
+    let v = zipx::read_json(&mut zip, "modrinth.index.json").context("这不是 Modrinth 整合包（缺少 modrinth.index.json）")?;
+    serde_json::from_value(v).context("整合包格式不对（modrinth.index.json）")
+}
+
+/// 导入本地整合包前先看看里面是什么
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInfo {
+    pub name: String,
+    pub version: String,
+    pub summary: Option<String>,
+    pub mc: String,
+    /// 比如 "Fabric 0.16.10"
+    pub loader: Option<String>,
+    /// 要下载的文件数
+    pub files: usize,
+}
+
+pub fn read_pack(path: &Path) -> Result<PackInfo> {
+    let idx = read_index(path)?;
+    let mc = idx.dependencies.get("minecraft").cloned().ok_or_else(|| anyhow!("整合包没写游戏版本"))?;
+    let loader = [("fabric-loader", "Fabric"), ("quilt-loader", "Quilt"), ("neoforge", "NeoForge"), ("forge", "Forge")]
+        .iter()
+        .find_map(|(k, label)| idx.dependencies.get(*k).map(|v| format!("{label} {v}")));
+    Ok(PackInfo { name: idx.name, version: idx.version_id, summary: idx.summary, mc, loader, files: idx.files.len() })
+}
+
 pub async fn install(ctx: &TaskCtx, req: &ModpackReq) -> Result<()> {
     let game_dir = PathBuf::from(&req.game_dir);
     game::validate_name(&game_dir, &req.name)?;
@@ -127,27 +168,36 @@ pub async fn install(ctx: &TaskCtx, req: &ModpackReq) -> Result<()> {
 }
 
 async fn run(ctx: &TaskCtx, req: &ModpackReq, game_dir: &Path, tmp: &Path) -> Result<()> {
-    // 1. 整合包文件
-    ctx.stage("下载整合包");
-    let v = modrinth::version(&req.version_id).await?;
-    if v["project_id"].as_str() != Some(req.project_id.as_str()) {
-        bail!("选的版本不属于这个整合包");
-    }
-    let f = modrinth::primary_file(&v).ok_or_else(|| anyhow!("这个版本没有文件"))?;
-    let url = f["url"].as_str().ok_or_else(|| anyhow!("没有下载地址"))?.to_string();
-    let pack = tmp.join("pack.mrpack");
-    let item = DlItem {
-        urls: with_mirror(&[url]),
-        path: pack.clone(),
-        sha1: f.pointer("/hashes/sha1").and_then(Value::as_str).map(str::to_lowercase),
-        size: f["size"].as_u64(),
-        verify_existing: true,
+    // 1. 整合包文件：本地导入直接读，否则从 Modrinth 下载
+    let (pack, source) = if let Some(file) = &req.file {
+        ctx.stage("读取整合包");
+        let p = PathBuf::from(file);
+        if !p.is_file() {
+            bail!("找不到整合包文件：{file}");
+        }
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        (p, json!({ "file": name }))
+    } else {
+        ctx.stage("下载整合包");
+        let v = modrinth::version(&req.version_id).await?;
+        if v["project_id"].as_str() != Some(req.project_id.as_str()) {
+            bail!("选的版本不属于这个整合包");
+        }
+        let f = modrinth::primary_file(&v).ok_or_else(|| anyhow!("这个版本没有文件"))?;
+        let url = f["url"].as_str().ok_or_else(|| anyhow!("没有下载地址"))?.to_string();
+        let pack = tmp.join("pack.mrpack");
+        let item = DlItem {
+            urls: with_mirror(&[url]),
+            path: pack.clone(),
+            sha1: f.pointer("/hashes/sha1").and_then(Value::as_str).map(str::to_lowercase),
+            size: f["size"].as_u64(),
+            verify_existing: true,
+        };
+        net::download_one(&item, ctx).await.context("下载整合包失败")?;
+        let source = json!({ "projectId": req.project_id, "versionId": req.version_id, "versionNumber": v["version_number"] });
+        (pack, source)
     };
-    net::download_one(&item, ctx).await.context("下载整合包失败")?;
-    let idx: Index = {
-        let mut zip = zipx::open(&pack)?;
-        serde_json::from_value(zipx::read_json(&mut zip, "modrinth.index.json")?).context("整合包格式不对（modrinth.index.json）")?
-    };
+    let idx = read_index(&pack)?;
     let (mc, loader) = loader_of(&idx).await?;
     if loader.is_none() {
         ctx.set_stage_count(STAGES - 1);
@@ -168,7 +218,7 @@ async fn run(ctx: &TaskCtx, req: &ModpackReq, game_dir: &Path, tmp: &Path) -> Re
 
     // 3、4 失败就把装了一半的版本删掉
     let version_dir = game_dir.join("versions").join(&req.name);
-    let r = files_and_overrides(ctx, req, &idx, &pack, game_dir, &version_dir, &v).await;
+    let r = files_and_overrides(ctx, req, &idx, &pack, game_dir, &version_dir, source).await;
     if r.is_err() {
         let _ = std::fs::remove_dir_all(&version_dir);
     }
@@ -182,7 +232,7 @@ async fn files_and_overrides(
     pack: &Path,
     game_dir: &Path,
     version_dir: &Path,
-    v: &Value,
+    source: Value,
 ) -> Result<()> {
     let run_dir = installed::run_dir(game_dir, &req.name)?;
 
@@ -217,11 +267,10 @@ async fn files_and_overrides(
     // 记下来源，以后可以检查整合包更新
     let meta_path = version_dir.join("amc.json");
     let mut meta: Value = std::fs::read(&meta_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| json!({}));
-    meta["modpack"] = json!({
-        "projectId": req.project_id,
-        "versionId": req.version_id,
-        "versionNumber": v["version_number"],
-    });
+    let mut source = source;
+    source["name"] = json!(idx.name);
+    source["version"] = json!(idx.version_id);
+    meta["modpack"] = source;
     std::fs::write(&meta_path, serde_json::to_vec_pretty(&meta)?)?;
     Ok(())
 }
@@ -233,6 +282,9 @@ mod tests {
     #[tokio::test]
     async fn loader_detection() {
         let idx = |deps: &[(&str, &str)]| Index {
+            name: String::new(),
+            version_id: String::new(),
+            summary: None,
             dependencies: deps.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             files: vec![],
         };
@@ -291,6 +343,7 @@ mod tests {
         install(
             &ctx,
             &ModpackReq {
+                file: None,
                 task_id: "mp".into(),
                 game_dir: root.to_string_lossy().into(),
                 name: "FO".into(),

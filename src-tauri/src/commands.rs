@@ -9,6 +9,7 @@ use tauri::{AppHandle, State};
 use crate::auth;
 use crate::game::{self, installed, launch, meta};
 use crate::modpack;
+use crate::modpack_export;
 use crate::modrinth;
 use crate::skin;
 use crate::java::{self, JavaInfo};
@@ -62,6 +63,27 @@ pub async fn optifine_versions(mc: String) -> CmdResult<Vec<meta::OptiFineVersio
 #[tauri::command]
 pub async fn find_java() -> Vec<JavaInfo> {
     tauri::async_runtime::spawn_blocking(java::find_all).await.unwrap_or_default()
+}
+
+/// 看看本地整合包里是什么（导入前）
+#[tauri::command]
+pub fn read_modpack(path: String) -> CmdResult<modpack::PackInfo> {
+    modpack::read_pack(&PathBuf::from(path)).map_err(err)
+}
+
+/// 导出整合包时可以选的文件和文件夹
+#[tauri::command]
+pub async fn export_entries(game_dir: String, name: String) -> CmdResult<Vec<modpack_export::Entry>> {
+    tauri::async_runtime::spawn_blocking(move || modpack_export::entries(&PathBuf::from(game_dir), &name))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
+}
+
+/// 把版本导出成 .mrpack
+#[tauri::command]
+pub async fn export_modpack(req: modpack_export::ExportReq) -> CmdResult<modpack_export::ExportResult> {
+    modpack_export::export(&req).await.map_err(err)
 }
 
 /// 安装 Modrinth 整合包，进度和普通安装一样走 `install-progress`
