@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { smooth } from "$lib/motion";
   import { slide } from "svelte/transition";
   import { Box, FlaskConical, Search, Download as DownloadIcon, Check, X, LoaderCircle, RefreshCw, Info, History } from "@lucide/svelte";
   import Select from "$lib/components/Select.svelte";
-  import { library, settings, installs, javas } from "$lib/state.svelte";
+  import { library, settings, installs, javas, cached, remember } from "$lib/state.svelte";
   import {
     api,
     checkVersionName,
@@ -24,11 +25,20 @@
   let loading = $state(true);
   let loadErr = $state("");
 
-  async function loadManifest() {
+  /** 版本列表：10 分钟内再打开直接用上次的，点“重试”才强制重新获取 */
+  async function loadManifest(force = false) {
+    const key = `manifest:${settings.source}`;
+    const hit = force ? undefined : cached<ManifestEntry[]>(key, 10 * 60_000);
+    if (hit) {
+      versions = hit;
+      loading = false;
+      return;
+    }
     loading = true;
     loadErr = "";
     try {
       versions = await api.manifest(settings.source);
+      remember(key, versions);
     } catch (e) {
       loadErr = String(e);
     } finally {
@@ -168,7 +178,7 @@
     <div class="page-head">
       <div>
         <h1>下载游戏</h1>
-        <p>选好版本和加载器，装好后会出现在版本管理里 · 下载源：{settings.source === "bmcl" ? "BMCLAPI 镜像（失败自动换官方源）" : "官方源"}</p>
+        <p>选好版本和加载器就能安装</p>
       </div>
       {#if latest}<span class="badge green">最新正式版 {latest}</span>{/if}
     </div>
@@ -187,11 +197,20 @@
     </div>
 
     {#if loading}
-      <p class="state"><LoaderCircle size={18} class="spin" />正在获取版本列表…</p>
+      <div class="list" aria-label="正在获取版本列表">
+        {#each Array(8) as _, k (k)}
+          <div class="row-wrap sk-row" style:--i={k}>
+            <span class="skel" style:width="{70 + ((k * 23) % 50)}px"></span>
+            <span class="skel sk-tag"></span>
+            <span class="sk-sp"></span>
+            <span class="skel sk-date"></span>
+          </div>
+        {/each}
+      </div>
     {:else if loadErr}
       <div class="state err">
         <p>版本列表获取失败：{loadErr}</p>
-        <button class="btn btn-sm" onclick={loadManifest}><RefreshCw size={14} />重试</button>
+        <button class="btn btn-sm" onclick={() => loadManifest(true)}><RefreshCw size={14} />重试</button>
       </div>
     {:else}
       <div class="list">
@@ -239,7 +258,7 @@
             {/if}
 
             {#if expanded === v.id && !task}
-              <div class="opts" transition:slide={{ duration: 200 }}>
+              <div class="opts" transition:slide={{ duration: 260, easing: smooth }}>
                 <div class="opt">
                   <span class="lbl">加载器</span>
                   <div class="ctl">
@@ -311,7 +330,7 @@
                   </div>
                 </div>
 
-                {#if ofForgeReq}
+                {#if ofForgeReq && (ofForgeReq.incompatible || !ofForgeReq.match)}
                   <div class="note" class:bad={ofForgeReq.incompatible}>
                     <Info size={14} />
                     {#if ofForgeReq.incompatible}
@@ -321,15 +340,11 @@
                       {#if ofForgeReq.available}
                         <button class="btn btn-sm" onclick={() => useForge(ofForgeReq.available!)}>改用 {ofForgeReq.version}</button>
                       {/if}
-                    {:else}
-                      Forge 版本和 OptiFine 匹配
                     {/if}
                   </div>
                 {/if}
 
-                {#if noJava}
-                  <div class="note"><Info size={14} />没找到 Java。装 Forge、NeoForge、OptiFine 要用到 Java，安装时会自动下载合适的版本。</div>
-                {/if}
+
 
                 <div class="opt">
                   <span class="lbl">版本名称</span>
@@ -415,13 +430,31 @@
     flex-direction: column;
     gap: 6px;
   }
+  .sk-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 54px;
+    padding: 0 16px;
+  }
+  .sk-row .skel {
+    height: 13px;
+  }
+  .sk-tag {
+    width: 42px;
+  }
+  .sk-date {
+    width: 80px;
+  }
+  .sk-sp {
+    flex: 1;
+  }
   .row-wrap {
     border-radius: var(--r-lg);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
-    transition: border-color 0.2s;
-    animation: rise 0.4s var(--ease) backwards;
-    animation-delay: calc(min(var(--i), 10) * 25ms);
+    transition: border-color 0.2s var(--ease);
   }
   .row-wrap:hover,
   .row-wrap.open {

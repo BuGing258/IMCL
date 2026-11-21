@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fade, scale } from "svelte/transition";
+  import Modal from "./Modal.svelte";
   import { TriangleAlert, FolderOpen, Copy, X } from "@lucide/svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { game, toast, nav } from "$lib/state.svelte";
@@ -36,28 +36,10 @@
     }
   }
 
-  function onKey(e: KeyboardEvent) {
-    if (p && e.key === "Escape") {
-      e.stopPropagation();
-      close();
-    }
-  }
 </script>
 
-<svelte:window onkeydowncapture={onKey} />
-
 {#if p}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="mask" transition:fade={{ duration: 150 }} onclick={close}>
-    <div
-      class="dialog"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="gp-title"
-      tabindex="-1"
-      transition:scale={{ start: 0.96, duration: 180 }}
-      onclick={(e) => e.stopPropagation()}
-    >
+  <Modal onclose={close} width={640} role="alertdialog" labelledby="gp-title">
       <header>
         <span class="ic"><TriangleAlert size={18} /></span>
         <h2 id="gp-title">{p.title}</h2>
@@ -76,33 +58,10 @@
         {/if}
         <button class="btn btn-sm btn-primary" onclick={close}>知道了</button>
       </footer>
-    </div>
-  </div>
+    </Modal>
 {/if}
 
 <style>
-  .mask {
-    position: fixed;
-    inset: 0;
-    z-index: 1500;
-    background: rgba(0, 0, 0, 0.35);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .dialog {
-    width: min(640px, 100%);
-    max-height: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 16px 18px;
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
-  }
   header {
     display: flex;
     align-items: center;

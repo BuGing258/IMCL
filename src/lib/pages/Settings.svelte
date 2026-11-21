@@ -1,11 +1,26 @@
 <script lang="ts">
-  import { FolderOpen, X, Check, Download as DownloadIcon, ExternalLink } from "@lucide/svelte";
+  import { FolderOpen, X, Check, Download as DownloadIcon, ExternalLink, ImagePlus, Pipette } from "@lucide/svelte";
+  import { ACCENTS, fill } from "$lib/theme";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { getVersion } from "@tauri-apps/api/app";
   import { appDataDir } from "@tauri-apps/api/path";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
-  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem, installs, type InstallTask } from "$lib/state.svelte";
+  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem, installs, appearance, memory, library, type InstallTask } from "$lib/state.svelte";
+
+  const isPreset = $derived(ACCENTS.some((a) => a.color.toLowerCase() === settings.accent.toLowerCase()));
+  /** 当前背景材质对应的卡片材质 */
+  const card = $derived(appearance.card);
+
+  /* 内存分配：自动时按首页选中的版本算给多少；手动最多给到总内存减 2 GB */
+  const plan = $derived(memory.plan(library.current?.name ?? null));
+  const memMax = $derived(plan?.maxMb ?? 16384);
+  const autoMem = $derived(settings.memoryMode === "auto");
+  const memShown = $derived(autoMem ? (plan?.autoMb ?? 0) : Math.min(settings.memory, memMax));
+  // 换到内存更小的电脑上时，手动值不能超过上限
+  $effect(() => {
+    if (plan && settings.memory > plan.maxMb) settings.memory = plan.maxMb;
+  });
 
   if (!javas.offers) javas.loadOffers();
 
@@ -59,10 +74,7 @@
     <section class="group" style:--i={1}>
       <h2>游戏</h2>
       <div class="row">
-        <div class="lbl">
-          <b>游戏目录</b>
-          <span>可以添加其他启动器的 .minecraft，里面已装的版本会直接读出来；也可以在版本管理里切换</span>
-        </div>
+        <div class="lbl"><b>游戏目录</b></div>
         <div class="ctl">
           <Select
             bind:value={settings.gameDir}
@@ -79,22 +91,29 @@
         </div>
       </div>
       <div class="row">
-        <div class="lbl"><b>最大内存</b><span>建议不超过电脑内存的一半</span></div>
+        <div class="lbl"><b>内存分配</b></div>
         <div class="ctl">
-          <input type="range" min="1024" max="16384" step="512" bind:value={settings.memory} aria-label="最大内存" />
-          <span class="val">{fmtMem(settings.memory)}</span>
+          <div class="seg">
+            <button class:on={autoMem} onclick={() => (settings.memoryMode = "auto")}>自动分配</button>
+            <button class:on={!autoMem} onclick={() => (settings.memoryMode = "manual")}>手动分配</button>
+          </div>
+        </div>
+      </div>
+      <div class="row sub">
+        <div class="lbl">{#if plan}<span>电脑内存 {fmtMem(plan.totalMb)}</span>{/if}</div>
+        <div class="ctl">
+          {#if autoMem}
+            <input type="range" class="locked" min="1024" max={memMax} step="512" value={memShown} use:fill={[memShown, memMax]} disabled aria-label="内存占用" />
+          {:else}
+            <input type="range" min="1024" max={memMax} step="512" bind:value={settings.memory} use:fill={[settings.memory, memMax]} aria-label="内存占用" />
+          {/if}
+          <span class="val">{memShown ? fmtMem(memShown) : "…"}</span>
         </div>
       </div>
       <div class="row">
         <div class="lbl">
           <b>Java</b>
-          <span>
-            {javas.found === null
-              ? "正在查找电脑上的 Java…"
-              : javas.all.length
-                ? `找到 ${javas.all.length} 个；自动选择会按游戏版本挑合适的`
-                : "没找到 Java，装 Forge / OptiFine 和启动游戏都需要它"}
-          </span>
+          {#if javas.found !== null && !javas.all.length}<span>电脑上没有 Java，启动时会自动下载</span>{/if}
         </div>
         <div class="ctl">
           <Select
@@ -107,10 +126,7 @@
         </div>
       </div>
       <div class="row col">
-        <div class="lbl">
-          <b>下载 Java</b>
-          <span>缺 Java 时启动游戏会自动下载，也可以先下好。下载前会测一下速度，自动用官方源和镜像里快的那个</span>
-        </div>
+        <div class="lbl"><b>下载 Java</b></div>
         <div class="jgrid">
           {#each javas.offers ?? [] as o (o.component)}
             {@const t = javas.taskOf(o.component)}
@@ -139,7 +155,7 @@
         </div>
       </div>
       <div class="row">
-        <div class="lbl"><b>JVM 参数</b><span>追加在启动参数里，不懂可以留空</span></div>
+        <div class="lbl"><b>JVM 参数</b><span>不懂可以留空</span></div>
         <div class="ctl">
           <input class="input mono" bind:value={settings.jvmArgs} placeholder="例如 -XX:+UseG1GC" spellcheck="false" aria-label="JVM 参数" />
         </div>
@@ -168,6 +184,88 @@
           </div>
         </div>
       </div>
+      <div class="row">
+        <div class="lbl"><b>主题色</b></div>
+        <div class="ctl swatches">
+          {#each ACCENTS as a (a.color)}
+            <button
+              class="sw"
+              class:on={a.color.toLowerCase() === settings.accent.toLowerCase()}
+              style:--c={a.color}
+              title={a.name}
+              aria-label="主题色：{a.name}"
+              onclick={() => (settings.accent = a.color)}
+            ></button>
+          {/each}
+          <label class="sw custom" class:on={!isPreset} style:--c={isPreset ? "transparent" : settings.accent} title="自定义颜色">
+            <input type="color" bind:value={settings.accent} aria-label="自定义主题色" />
+            {#if isPreset}<Pipette size={13} />{/if}
+          </label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="lbl"><b>背景材质</b></div>
+        <div class="ctl">
+          <div class="seg">
+            <button class:on={settings.material === "solid"} onclick={() => (settings.material = "solid")}>实色</button>
+            <button
+              class:on={settings.material === "mica"}
+              disabled={!appearance.win11}
+              title={appearance.win11 ? undefined : "需要 Win11"}
+              onclick={() => (settings.material = "mica")}>云母</button
+            >
+          </div>
+        </div>
+      </div>
+      {#if settings.material === "solid"}
+        <div class="row sub">
+          <div class="lbl"><b>背景图片</b></div>
+          <div class="ctl bg-ctl">
+            {#if settings.background === "image" && appearance.bgImage}
+              <span class="thumb" style:background-image="url({appearance.bgImage})"></span>
+              <button class="btn btn-sm" onclick={() => appearance.pickImage()}><ImagePlus size={14} />换一张</button>
+            {/if}
+            <div class="seg">
+              <button class:on={appearance.backgroundKind === "none"} onclick={() => (settings.background = "none")}>无</button>
+              <button class:on={appearance.backgroundKind === "image"} onclick={() => (appearance.bgImage ? (settings.background = "image") : appearance.pickImage())}>图片</button>
+            </div>
+          </div>
+        </div>
+        {#if appearance.backgroundKind === "image"}
+          <div class="row sub">
+            <div class="lbl"><b>模糊</b></div>
+            <div class="ctl">
+              <input type="range" min="0" max="20" step="1" bind:value={settings.bgBlur} use:fill={settings.bgBlur} aria-label="背景图模糊" />
+              <span class="val">{settings.bgBlur}</span>
+            </div>
+          </div>
+        {/if}
+      {/if}
+      <div class="row">
+        <div class="lbl"><b>卡片材质</b></div>
+        <div class="ctl">
+          <div class="seg">
+            <button class:on={card.kind === "custom"} onclick={() => (card.kind = "custom")}>自定义</button>
+            <button class:on={card.kind === "mica"} onclick={() => (card.kind = "mica")}>云母</button>
+          </div>
+        </div>
+      </div>
+      {#if card.kind === "custom"}
+        <div class="row sub">
+          <div class="lbl"><b>不透明度</b></div>
+          <div class="ctl">
+            <input type="range" min="0" max="100" step="5" bind:value={card.opacity} use:fill={card.opacity} aria-label="卡片不透明度" />
+            <span class="val">{card.opacity}%</span>
+          </div>
+        </div>
+        <div class="row sub">
+          <div class="lbl"><b>模糊</b></div>
+          <div class="ctl">
+            <input type="range" min="0" max="40" step="2" bind:value={card.blur} use:fill={card.blur} aria-label="卡片模糊" />
+            <span class="val">{card.blur}</span>
+          </div>
+        </div>
+      {/if}
     </section>
 
     <section class="group" style:--i={3}>
@@ -182,9 +280,9 @@
         </div>
       </div>
       <div class="row">
-        <div class="lbl"><b>同时下载数</b><span>网络不稳定时可以调低</span></div>
+        <div class="lbl"><b>同时下载数</b></div>
         <div class="ctl">
-          <input type="range" min="8" max="128" step="8" bind:value={settings.threads} aria-label="同时下载数" />
+          <input type="range" min="8" max="128" step="8" bind:value={settings.threads} use:fill={settings.threads} aria-label="同时下载数" />
           <span class="val">{settings.threads}</span>
         </div>
       </div>
@@ -195,7 +293,7 @@
       <div class="row">
         <div class="about">
           <span class="logo">IMCL</span>
-          <div class="lbl"><b>IMCL {version}</b><span>轻量的 Minecraft Java 版启动器，和朋友一起玩用</span></div>
+          <div class="lbl"><b>IMCL {version}</b><span>Tauri 开发的 Minecraft Java 版启动器</span></div>
         </div>
         <div class="ctl">
           <button class="btn btn-sm" onclick={openDataDir} title="账户、下载的 Java、皮肤缓存都在这里"><FolderOpen size={14} />数据文件夹</button>
@@ -209,7 +307,7 @@
       </div>
       <div class="row">
         <div class="lbl">
-          <b>下载服务</b>
+          <b>特别鸣谢</b>
           <span>
             游戏文件来自 Mojang 官方和
             <button class="lnk" onclick={() => link("https://bmclapidoc.bangbang93.com")}>BMCLAPI<ExternalLink size={10} /></button>
@@ -217,10 +315,11 @@
             <button class="lnk" onclick={() => link("https://modrinth.com")}>Modrinth<ExternalLink size={10} /></button>
             和
             <button class="lnk" onclick={() => link("https://github.com/mcmod-info-mirror/mcim")}>MCIM<ExternalLink size={10} /></button>
-            镜像，感谢它们
+            镜像
           </span>
         </div>
       </div>
+      
       <div class="row">
         <div class="lbl"><span class="faint">IMCL 不是 Mojang 或微软的官方产品，Minecraft 是 Mojang Studios 的商标</span></div>
       </div>
@@ -233,10 +332,9 @@
     max-width: 720px;
     margin: 0 auto;
   }
+  /* 分组是卡片（.row）的祖先，只能用 lift，见 app.css */
   .group {
     margin-bottom: 18px;
-    animation: rise 0.45s var(--ease) backwards;
-    animation-delay: calc(var(--i) * 50ms + 40ms);
   }
   h2 {
     font-size: 12px;
@@ -252,6 +350,7 @@
     gap: 20px;
     padding: 12px 16px;
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     border-bottom-width: 0;
   }
@@ -293,6 +392,60 @@
   }
   .lnk:hover {
     text-decoration: underline;
+  }
+  .swatches {
+    gap: 8px;
+  }
+  .sw {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--c);
+    box-shadow: 0 0 0 1px var(--border-strong);
+    display: grid;
+    place-items: center;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  }
+  .sw:hover {
+    transform: scale(1.12);
+  }
+  .sw.on {
+    box-shadow:
+      0 0 0 2px var(--surface-solid),
+      0 0 0 4px var(--c);
+  }
+  .sw.custom {
+    background: conic-gradient(from 0deg, #ef323d, #f0b21f, #1fa463, #109fa8, #2f7cf6, #7c5cf0, #e4508e, #ef323d);
+  }
+  .sw.custom.on {
+    background: var(--c);
+    box-shadow:
+      0 0 0 2px var(--surface-solid),
+      0 0 0 4px var(--c);
+  }
+  .sw.custom :global(svg) {
+    color: #fff;
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
+  }
+  .sw.custom input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .bg-ctl {
+    gap: 10px;
+  }
+  .thumb {
+    width: 64px;
+    height: 36px;
+    border-radius: 6px;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 0 0 1px var(--border-strong);
   }
   .row.col {
     flex-direction: column;
@@ -349,7 +502,7 @@
     display: block;
     height: 100%;
     background: var(--red);
-    transition: width 0.3s;
+    transition: width 0.3s var(--ease);
   }
   .jpct {
     font-size: 12px;
@@ -373,6 +526,15 @@
   }
   .lbl span {
     font-size: 12px;
+    color: var(--text-2);
+  }
+  /* 从属于上一行的设置：标题缩进、字小一点 */
+  .row.sub .lbl {
+    padding-left: 14px;
+  }
+  .row.sub .lbl b {
+    font-size: 13px;
+    font-weight: 500;
     color: var(--text-2);
   }
   .ctl {

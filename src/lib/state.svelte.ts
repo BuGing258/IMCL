@@ -1,7 +1,8 @@
+import { invoke } from "@tauri-apps/api/core";
 // 全局界面状态（Svelte 5 runes）。
 // 已接后端：系统状态、下载安装、已安装版本。其余（Mod 市场、启动游戏、账户登录）仍是前端模拟。
 import { listen } from "@tauri-apps/api/event";
-import { api, isTauri, type JavaOffer, type GameExit, type InstallRequest, type MsAccountInfo, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings } from "./api";
+import { api, isTauri, type JavaOffer, type GameExit, type InstallRequest, type MsAccountInfo, type JavaInfo, type LoaderKind, type ProgressEvent, type VersionSettings, type MemoryPlan } from "./api";
 import { mockPacks, packLook, type Loader, type Pack, type ResKind, type MarketKind } from "./mock";
 
 export { isTauri };
@@ -68,6 +69,9 @@ function save(key: string, value: unknown) {
 
 /* ---------- 设置 ---------- */
 export interface Settings {
+  /** 内存分配：自动 / 手动 */
+  memoryMode: "auto" | "manual";
+  /** 手动分配的内存（MB） */
   memory: number;
   java: string;
   windowMode: "default" | "720p" | "fullscreen";
@@ -88,6 +92,27 @@ export interface Settings {
   msClientId: string;
   /** 安装 Mod 时自动装前置 */
   autoDeps: boolean;
+  /** 主题色 */
+  accent: string;
+  /** 背景材质：实色 / 云母 */
+  material: Material;
+  /** 实色时的背景：无 / 自己的图片（图片存在应用数据目录里） */
+  background: "none" | "image";
+  /** 背景图模糊（px） */
+  bgBlur: number;
+  /** 卡片材质，实色和云母背景各存一份 */
+  cards: Record<Material, CardMaterial>;
+}
+
+export type Material = "solid" | "mica";
+
+export interface CardMaterial {
+  /** 自定义不透明度和模糊，或者直接用云母 */
+  kind: "custom" | "mica";
+  /** 0~100% */
+  opacity: number;
+  /** px */
+  blur: number;
 }
 
 export interface GameDir {
@@ -97,6 +122,7 @@ export interface GameDir {
 
 export const settings = $state<Settings>(
   load("amc.settings", {
+    memoryMode: "auto",
     memory: 4096,
     java: "auto",
     windowMode: "default",
@@ -110,6 +136,14 @@ export const settings = $state<Settings>(
     msClientId: "",
     extraJavas: [],
     autoDeps: true,
+    accent: "#ef323d",
+    material: "solid",
+    background: "none",
+    bgBlur: 0,
+    cards: {
+      solid: { kind: "custom", opacity: 100, blur: 0 },
+      mica: { kind: "custom", opacity: 55, blur: 0 },
+    },
   }),
 );
 
@@ -122,6 +156,90 @@ export const WINDOW_LABELS: Record<Settings["windowMode"], string> = {
 export function fmtMem(mb: number) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1).replace(/\.0$/, "")} GB` : `${mb} MB`;
 }
+
+/** 离线账户启动时带上的皮肤（游戏里也显示）；还没有皮肤图（没装过游戏）就不带 */
+function offlineSkinOf(acc: Account): { png: string; slim: boolean } | null {
+  if (acc.type !== "offline") return null;
+  const png = skins.of(acc);
+  if (!png) return null;
+  const slim = acc.skin === "alex" || (acc.skin === "custom" && !!acc.skinSlim);
+  return { png, slim };
+}
+
+/* ---------- 外观 ---------- */
+class Appearance {
+  /** 背景图（data URL），从应用数据目录读出来 */
+  bgImage = $state<string | null>(null);
+  /** 系统是不是 Win11（云母只有 Win11 有） */
+  win11 = $state(true);
+  /** 当前是不是暗色（跟随系统时看系统） */
+  dark = $state(false);
+
+  /** 实际显示的背景：云母不显示背景图（会挡住系统效果） */
+  get backgroundKind(): "none" | "image" {
+    if (settings.material !== "solid") return "none";
+    if (settings.background === "image" && !this.bgImage) return "none";
+    return settings.background;
+  }
+
+  /** 当前背景材质对应的卡片材质 */
+  get card(): CardMaterial {
+    // 旧设置里可能还是“亚克力”，迁移之前先当实色
+    return settings.cards[settings.material] ?? settings.cards.solid;
+  }
+
+  async load() {
+    // 液态玻璃、亚克力、渐变背景都去掉了，之前选过的换成相近的
+    const m = settings.material as string;
+    if (m === "liquid") settings.material = "solid";
+    if (m === "acrylic") settings.material = "mica";
+    if ((settings.background as string) === "gradient") settings.background = "none";
+    if (!isTauri()) return;
+    this.win11 = await api.isWin11().catch(() => true);
+    if (!this.win11 && settings.material === "mica") settings.material = "solid";
+    if (settings.background === "image") this.bgImage = await api.backgroundImage().catch(() => null);
+  }
+
+  /** 选一张图当背景 */
+  async pickImage() {
+    if (!isTauri()) {
+      toast.show("浏览器预览里不能选图片");
+      return;
+    }
+    const p = await api.pickImage();
+    if (!p) return;
+    try {
+      this.bgImage = await api.setBackgroundImage(p);
+      settings.background = "image";
+    } catch (e) {
+      toast.show(String(e));
+    }
+  }
+}
+export const appearance = new Appearance();
+
+/* ---------- 内存分配 ---------- */
+class Memory {
+  /** key：游戏目录 + 版本名（空 = 原版） */
+  plans = $state<Record<string, MemoryPlan>>({});
+
+  /** 取一个版本的内存方案；第一次取时去后端读，之后用缓存 */
+  plan(version: string | null): MemoryPlan | null {
+    const key = `${settings.gameDir}|${version ?? ""}`;
+    const p = this.plans[key];
+    if (!p && !this.#loading.has(key)) {
+      this.#loading.add(key);
+      api
+        .memoryPlan(settings.gameDir, version)
+        .then((r) => (this.plans[key] = r))
+        .catch(() => {})
+        .finally(() => this.#loading.delete(key));
+    }
+    return p ?? null;
+  }
+  #loading = new Set<string>();
+}
+export const memory = new Memory();
 
 /* ---------- 账户 ---------- */
 export type AccountType = "offline" | "microsoft" | "authlib";
@@ -142,6 +260,8 @@ export interface Account {
   skin?: SkinChoice;
   /** 自定义皮肤，或者正版账户的皮肤（data URL） */
   skinData?: string;
+  /** 自定义皮肤是不是细手臂（Alex 模型） */
+  skinSlim?: boolean;
 }
 
 /* ---------- 皮肤 ---------- */
@@ -183,6 +303,28 @@ class Skins {
 export const skins = new Skins();
 
 /** 读取用户选的皮肤文件，检查尺寸，返回 data URL */
+/** 看皮肤是不是细手臂（Alex 模型）：细手臂的皮肤，右臂第 4 列像素是透明的 */
+export function detectSlim(dataUrl: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(false);
+    img.onload = () => {
+      if (img.height !== img.width) return resolve(false); // 64×32 的老皮肤没有细手臂
+      const u = img.width / 64;
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext("2d", { willReadFrequently: true })!;
+      g.drawImage(img, 0, 0);
+      const a = g.getImageData(54 * u, 20 * u, 2 * u, 12 * u).data;
+      let clear = true;
+      for (let i = 3; i < a.length; i += 4) if (a[i] > 0) clear = false;
+      resolve(clear);
+    };
+    img.src = dataUrl;
+  });
+}
+
 export function readSkinFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     if (file.size > 512 * 1024) return reject(new Error("皮肤文件太大了，正常的皮肤只有几 KB"));
@@ -228,7 +370,19 @@ class Accounts {
     const a = this.list.find((x) => x.id === id);
     if (!a || a.type === "microsoft") return;
     a.skin = skin;
-    if (data) a.skinData = data;
+    if (data) {
+      a.skinData = data;
+      // 换了新图就重新判断手臂粗细
+      detectSlim(data).then((slim) => {
+        const cur = this.list.find((x) => x.id === id);
+        if (cur) cur.skinSlim = slim;
+      });
+    }
+  }
+
+  setSlim(id: string, slim: boolean) {
+    const a = this.list.find((x) => x.id === id);
+    if (a) a.skinSlim = slim;
   }
 
   addOffline(name: string) {
@@ -338,25 +492,42 @@ class Library {
     }
   }
 
+  /** 删除版本：整个版本文件夹移到回收站，再重新扫描；浏览器预览里只从列表去掉 */
+  async deleteVersion(pack: Pack) {
+    if (pack.real) {
+      await api.deleteVersion(settings.gameDir, pack.name);
+      await this.refresh();
+    } else {
+      this.packs = this.packs.filter((p) => p.id !== pack.id);
+      if (this.currentId === pack.id) this.currentId = this.packs[0]?.id ?? "";
+    }
+  }
+
   /** 读取某个版本文件夹里的 Mod、光影、材质包 */
   async loadFiles(pack: Pack, force = false) {
     if (!pack.real || (pack.filesLoaded && !force)) return;
     const f = await api.versionFiles(settings.gameDir, pack.name);
     const kb = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
-    pack.mods = f.mods.map((m) => ({
-      id: m.file,
-      name: m.file.replace(/\.disabled$/i, "").replace(/\.jar$/i, ""),
-      version: "",
-      size: kb(m.size),
-      enabled: m.enabled,
-    }));
+    // 重读时同一个文件沿用已经查到的版本号和图标，不会先变空再填回来（新加的文件之后再查）
+    const prev = new Map(pack.mods.map((m) => [m.id.replace(/\.disabled$/i, ""), m]));
+    pack.mods = f.mods.map((m) => {
+      const old = prev.get(m.file.replace(/\.disabled$/i, ""));
+      return {
+        id: m.file,
+        name: m.file.replace(/\.disabled$/i, "").replace(/\.jar$/i, ""),
+        version: old?.version ?? "",
+        icon: old?.icon,
+        size: kb(m.size),
+        enabled: m.enabled,
+      };
+    });
     pack.shaders = f.shaderpacks.map((x) => x.file);
     pack.resourcepacks = f.resourcepacks.map((x) => x.file);
     pack.filesLoaded = true;
     this.identify(pack);
   }
 
-  /** 在 Modrinth 上查出每个文件是哪个 Mod，换成正式名字和版本号（查不到的保留文件名） */
+  /** 在 Modrinth 上查出每个文件是哪个 Mod，补上版本号和图标（名字一直用文件名） */
   async identify(pack: Pack) {
     if (!pack.real) return;
     try {
@@ -365,7 +536,7 @@ class Library {
       for (const m of pack.mods) {
         const i = info[`mods/${m.id}`];
         if (i) {
-          m.name = i.title;
+          // 名字一直显示文件名，不替换；这里只补上版本号和图标
           m.version = i.versionNumber;
           m.icon = i.icon;
         }
@@ -536,7 +707,7 @@ export const javas = new Javas();
 /** Java 下拉框的选项：自动选择 + 每个 Java */
 export function javaOptions() {
   return [
-    { value: "auto", label: "自动选择", hint: "按游戏版本挑" },
+    { value: "auto", label: "自动选择" },
     ...javas.all.map((j) => ({ value: j.path, label: `Java ${j.major}`, hint: j.version, group: "已找到的 Java" })),
   ];
 }
@@ -558,6 +729,8 @@ export interface InstallTask {
   modpack?: string;
   /** Java 下载：组件名 */
   java?: string;
+  /** 更换加载器：版本名 */
+  loaderFor?: string;
 }
 
 export interface InstallOptions {
@@ -576,9 +749,70 @@ class Installs {
     return Object.values(this.tasks).find((t) => t.mc === mc);
   }
 
-  /** 正在安装的游戏版本数（不算 Java 下载） */
+  /** 正在安装的游戏版本数（不算 Java 下载和换加载器） */
   get running() {
-    return Object.values(this.tasks).filter((t) => t.status !== "error" && !t.java).length;
+    return Object.values(this.tasks).filter((t) => t.status !== "error" && !t.java && !t.loaderFor).length;
+  }
+
+  /** 给已有版本换加载器（Mod、存档、配置都留着） */
+  startChangeLoader(pack: Pack, loader: { kind: LoaderKind; id: string } | null) {
+    const id = `c-${Date.now()}`;
+    const label = loader ? loader.kind : "原版";
+    this.tasks[id] = {
+      id,
+      mc: "",
+      name: pack.name,
+      loaderFor: pack.name,
+      stage: "准备中",
+      stageIndex: 0,
+      stageCount: loader ? 5 : 4,
+      done: 0,
+      total: 0,
+      speed: 0,
+      status: "running",
+    };
+    const done = async () => {
+      delete this.tasks[id];
+      await library.refresh();
+      const p = library.packs.find((x) => x.name === pack.name);
+      if (p) library.loadFiles(p, true).catch(() => {});
+      toast.show(`${pack.name} 已经换成 ${label}${loader ? ` ${loader.id.replace(`${pack.mc}-`, "")}` : ""}`);
+    };
+    if (!isTauri()) {
+      let p = 0;
+      const timer = setInterval(() => {
+        const t = this.tasks[id];
+        if (!t || t.status === "cancelling") {
+          clearInterval(timer);
+          delete this.tasks[id];
+          return;
+        }
+        p += 5;
+        Object.assign(t, { stage: p < 60 ? "下载游戏本体和依赖库" : `安装 ${label}`, stageIndex: Math.min(t.stageCount, 1 + Math.floor(p / 25)), done: p % 25, total: 25 });
+        if (p >= 100) {
+          clearInterval(timer);
+          const pk = library.packs.find((x) => x.name === pack.name);
+          if (pk) Object.assign(pk, { loader: (loader?.kind ?? "原版") as Loader, loaderVersion: loader?.id ?? null, optifine: null, ...packLook(loader?.kind ?? null) });
+          delete this.tasks[id];
+          toast.show(`${pack.name} 已经换成 ${label}（演示）`);
+        }
+      }, 100);
+      return;
+    }
+    this.#listen();
+    api
+      .changeLoader({ taskId: id, gameDir: settings.gameDir, name: pack.name, loader, source: settings.source, threads: settings.threads })
+      .then(done)
+      .catch((e) => {
+        const msg = String(e);
+        if (msg.includes("已取消")) {
+          delete this.tasks[id];
+          toast.show(`已取消更换 ${pack.name} 的加载器`);
+        } else {
+          const t = this.tasks[id];
+          if (t) Object.assign(t, { status: "error", error: msg });
+        }
+      });
   }
 
   /** 下载 Java：先测速，用官方源和镜像里快的那个 */
@@ -822,6 +1056,7 @@ export const installs = new Installs();
 
 /** 启动时：取默认游戏目录，然后扫描已安装的版本 */
 export async function initBackend() {
+  appearance.load();
   javas.load();
   accounts.syncMicrosoft();
   await gameDirs.init();
@@ -962,11 +1197,13 @@ class Game {
         gameDir: settings.gameDir,
         name: p.name,
         java: vs.java ?? settings.java,
-        memory: vs.memory ?? settings.memory,
+        // 0 = 自动分配，后端按 Mod 数量算
+        memory: vs.memory ?? (settings.memoryMode === "auto" ? 0 : settings.memory),
         windowMode: vs.windowMode ?? settings.windowMode,
         jvmArgs: vs.jvmArgs ?? settings.jvmArgs,
         player: acc.name,
         msAccount: acc.type === "microsoft" ? acc.id : null,
+        offlineSkin: offlineSkinOf(acc),
         source: settings.source,
         threads: settings.threads,
       });
@@ -1077,6 +1314,7 @@ class SysMon {
   start() {
     if (this.#users++ > 0) return;
     if (this.live) {
+      invoke("sysmon_watch", { on: true }).catch(() => {});
       listen<SystemStats>("system-stats", (e) => {
         const s = e.payload;
         this.cpu = s.cpu;
@@ -1099,6 +1337,7 @@ class SysMon {
 
   stop() {
     if (--this.#users > 0) return;
+    if (this.live) invoke("sysmon_watch", { on: false }).catch(() => {});
     this.#unlisten?.();
     this.#unlisten = undefined;
     clearInterval(this.#timer);
@@ -1130,6 +1369,22 @@ class Toast {
   }
 }
 export const toast = new Toast();
+
+/* ---------- 本次运行内的小缓存：切页面回来不用重新请求 ---------- */
+const memo = new Map<string, { at: number; value: unknown }>();
+
+/** 取缓存；超过 maxAgeMs 就当没有 */
+export function cached<T>(key: string, maxAgeMs: number): T | undefined {
+  const hit = memo.get(key);
+  if (!hit || Date.now() - hit.at > maxAgeMs) return undefined;
+  return hit.value as T;
+}
+
+export function remember(key: string, value: unknown) {
+  memo.set(key, { at: Date.now(), value });
+  // 别无限长：最旧的先丢
+  if (memo.size > 60) memo.delete(memo.keys().next().value!);
+}
 
 /* ---------- 工具函数 ---------- */
 export function fmtTime(sec: number) {

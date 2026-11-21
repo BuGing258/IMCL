@@ -4,7 +4,7 @@
   import Select from "$lib/components/Select.svelte";
   import ResVersionPicker from "$lib/components/ResVersionPicker.svelte";
   import ImportPackDialog from "$lib/components/ImportPackDialog.svelte";
-  import { library, toast, ui, nav, fmtCount, isTauri, settings, installs } from "$lib/state.svelte";
+  import { library, toast, ui, nav, fmtCount, isTauri, settings, installs, cached, remember } from "$lib/state.svelte";
   import { RES_LABELS, type MarketKind } from "$lib/mock";
   import { api, type Hit, type ModVersion, type ResDep } from "$lib/api";
 
@@ -150,22 +150,33 @@
   let seq = 0;
   async function runSearch(append = false) {
     const my = ++seq;
+    const req = {
+      kind: ui.resKind,
+      query: translate(ui.resQuery),
+      // 整合包自己决定游戏版本，不按当前版本过滤
+      mc: isPack ? null : (pack?.mc ?? null),
+      loader: isPack ? null : loaderFilter,
+      category: cat || null,
+      sort,
+    };
+    // 5 分钟内搜过一样的（比如切到别的页面又回来），直接用上次的结果
+    const key = `search:${JSON.stringify(req)}`;
+    const hit = append ? undefined : cached<{ hits: Hit[]; total: number }>(key, 5 * 60_000);
+    if (hit) {
+      hits = hit.hits;
+      total = hit.total;
+      loading = false;
+      loadErr = "";
+      return;
+    }
     loading = true;
     loadErr = "";
     try {
-      const r = await api.searchResources({
-        kind: ui.resKind,
-        query: translate(ui.resQuery),
-        // 整合包自己决定游戏版本，不按当前版本过滤
-        mc: isPack ? null : (pack?.mc ?? null),
-        loader: isPack ? null : loaderFilter,
-        category: cat || null,
-        sort,
-        offset: append ? hits.length : 0,
-      });
+      const r = await api.searchResources({ ...req, offset: append ? hits.length : 0 });
       if (my !== seq) return;
       hits = append ? [...hits, ...r.hits] : r.hits;
       total = r.total;
+      remember(key, { hits, total });
     } catch (e) {
       if (my === seq) loadErr = String(e);
     } finally {
@@ -354,7 +365,7 @@
     <div class="page-head">
       <div>
         <h1>Mod</h1>
-        <p>Mod、光影、材质包、整合包都从 Modrinth 下载，会自动装上需要的前置</p>
+        <p>下载 Mod、光影、材质包和整合包</p>
       </div>
       {#if pack && !isPack}
         <label class="target">
@@ -407,7 +418,7 @@
     <div class="toolbar">
       <div class="search">
         <Search size={16} />
-        <input class="input" placeholder="搜索{RES_LABELS[ui.resKind]}（英文名更准，常用中文也能搜）" bind:value={ui.resQuery} />
+        <input class="input" placeholder="搜索{RES_LABELS[ui.resKind]}（英文名更准）" bind:value={ui.resQuery} />
       </div>
       <Select
         bind:value={cat}
@@ -429,8 +440,8 @@
 
     {#if isPack}
       <div class="pack-bar">
-        <p class="filter-note">整合包会装成一个新的游戏版本，游戏、加载器和 Mod 都自动装好{total ? ` · 共 ${fmtCount(total)} 个` : ""}</p>
-        <button class="btn btn-sm" onclick={pickPackFile} title="导入朋友发来的 .mrpack 整合包"><FolderInput size={14} />从文件导入</button>
+        <p class="filter-note">{total ? `共 ${fmtCount(total)} 个` : ""}</p>
+        <button class="btn btn-sm" onclick={pickPackFile} title="导入 .mrpack 整合包"><FolderInput size={14} />从文件导入</button>
       </div>
       {#each fileTasks as t (t.id)}
         <div class="file-task" class:bad={t.status === "error"}>
@@ -447,12 +458,8 @@
           {/if}
         </div>
       {/each}
-    {:else if pack}
-      <p class="filter-note">
-        只显示适合 {pack.mc}{isMod && pack.loader !== "原版" ? ` ${pack.loader}` : ""}{loaderFilter && !isMod
-          ? `（${loaderFilter === "iris" ? "Iris" : "OptiFine"}）`
-          : ""} 的{isMod ? " Mod" : RES_LABELS[ui.resKind]}{total ? ` · 共 ${fmtCount(total)} 个` : ""}
-      </p>
+    {:else if pack && total}
+      <p class="filter-note">共 {fmtCount(total)} 个</p>
     {/if}
 
     {#if loadErr}
@@ -514,15 +521,26 @@
             </div>
           </div>
         {:else}
-          {#if !loading}
+          {#if loading}
+            {#each Array(6) as _, k (k)}
+              <div class="mod sk-card" aria-hidden="true">
+                <span class="skel sk-ic"></span>
+                <div class="mt">
+                  <span class="skel" style:width="{40 + ((k * 17) % 30)}%"></span>
+                  <span class="skel sk-line"></span>
+                  <span class="skel sk-short"></span>
+                </div>
+              </div>
+            {/each}
+          {:else}
             <p class="none">
               {ui.resQuery ? `没找到「${ui.resQuery}」，试试英文名` : isPack ? "没有找到整合包" : `没有适合这个版本的${RES_LABELS[ui.resKind]}`}
             </p>
           {/if}
         {/each}
       </div>
-      {#if loading}
-        <p class="state faint"><LoaderCircle size={16} class="spin" />正在搜索…</p>
+      {#if loading && hits.length}
+        <p class="state faint"><LoaderCircle size={16} class="spin" />正在加载…</p>
       {:else if hits.length < total}
         <div class="state"><button class="btn" onclick={() => runSearch(true)}>加载更多</button></div>
       {/if}
@@ -555,11 +573,12 @@
     height: 44px;
     border-radius: var(--r-lg);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     font-size: 14px;
     font-weight: 600;
     color: var(--text-2);
-    transition: border-color 0.2s, color 0.2s, background 0.2s;
+    transition: border-color 0.2s var(--ease), color 0.2s var(--ease), background 0.2s var(--ease);
   }
   .kind:hover {
     border-color: var(--border-strong);
@@ -617,7 +636,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
     gap: 8px;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s var(--ease);
   }
   .grid.dim {
     opacity: 0.5;
@@ -629,14 +648,39 @@
     padding: 12px;
     border-radius: var(--r-lg);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
-    transition: border-color 0.2s;
-    animation: rise 0.4s var(--ease) backwards;
-    animation-delay: calc(min(var(--i), 12) * 25ms);
+    transition:
+      border-color 0.2s var(--ease),
+      transform 0.35s var(--ease-spring),
+      box-shadow 0.3s var(--ease);
     min-width: 0;
+  }
+  .sk-card {
+    pointer-events: none;
+  }
+  .sk-ic {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+  .sk-card .mt {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .sk-line {
+    width: 85%;
+  }
+  .sk-short {
+    width: 30%;
+    height: 10px;
   }
   .mod:hover {
     border-color: var(--border-strong);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
   }
   .mic {
     width: 44px;
@@ -679,7 +723,7 @@
     flex-shrink: 0;
     color: var(--text-3);
     opacity: 0;
-    transition: opacity 0.15s;
+    transition: opacity 0.15s var(--ease);
   }
   .title:hover {
     color: var(--red);
@@ -739,6 +783,7 @@
     margin-bottom: 8px;
     border-radius: var(--r);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     font-size: 12.5px;
   }
@@ -778,7 +823,7 @@
     height: 100%;
     background: var(--red);
     border-radius: 3px;
-    transition: width 0.3s;
+    transition: width 0.3s var(--ease);
   }
   .pk-pct {
     font-size: 12px;

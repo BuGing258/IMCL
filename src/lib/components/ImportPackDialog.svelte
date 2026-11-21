@@ -1,6 +1,6 @@
 <script lang="ts">
   // 从本地 .mrpack 文件导入整合包：看看里面是什么，填个版本名，然后像下载的整合包一样安装
-  import { fade, scale } from "svelte/transition";
+  import Modal from "./Modal.svelte";
   import { X, LoaderCircle, PackagePlus } from "@lucide/svelte";
   import { api, checkVersionName, type PackInfo } from "$lib/api";
   import { installs, library, toast } from "$lib/state.svelte";
@@ -46,26 +46,13 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      onclose();
-    } else if (e.key === "Enter" && info) go();
+    if (e.key === "Enter" && info) go();
   }
 </script>
 
 <svelte:window onkeydowncapture={onKey} />
 
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="mask" transition:fade={{ duration: 150 }} onclick={onclose}>
-  <div
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="im-title"
-    tabindex="-1"
-    transition:scale={{ start: 0.96, duration: 180 }}
-    onclick={(e) => e.stopPropagation()}
-  >
+<Modal {onclose} width={480} labelledby="im-title">
     <header>
       <span class="ic"><PackagePlus size={18} /></span>
       <div class="ht">
@@ -85,8 +72,6 @@
         <dd>{info.name || "（没写名字）"}{info.version ? ` ${info.version}` : ""}</dd>
         <dt>游戏版本</dt>
         <dd>Minecraft {info.mc}{info.loader ? ` · ${info.loader}` : " · 原版"}</dd>
-        <dt>要下载</dt>
-        <dd>{info.files} 个文件（Mod 等），其余已打包在里面</dd>
         {#if info.summary}<dt>简介</dt><dd>{info.summary}</dd>{/if}
       </dl>
       <label class="f">
@@ -94,7 +79,6 @@
         <input class="input" class:invalid={touched && !!nameErr} bind:value={name} oninput={() => (touched = true)} maxlength="64" spellcheck="false" />
       </label>
       {#if touched && nameErr}<p class="err-text">{nameErr}</p>{/if}
-      <p class="faint note">会新建一个游戏版本，自动装好游戏、加载器和整合包里的 Mod，不影响别的版本。</p>
     {/if}
 
     <footer>
@@ -102,31 +86,9 @@
       <button class="btn btn-sm" onclick={onclose}>取消</button>
       <button class="btn btn-sm btn-primary" onclick={go} disabled={!info || (touched && !!nameErr)}>导入</button>
     </footer>
-  </div>
-</div>
+  </Modal>
 
 <style>
-  .mask {
-    position: fixed;
-    inset: 0;
-    z-index: 1500;
-    background: rgba(0, 0, 0, 0.35);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .dialog {
-    width: min(480px, 100%);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px 18px;
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
-  }
   header {
     display: flex;
     align-items: center;
@@ -186,9 +148,6 @@
   }
   .f .input {
     font-weight: 400;
-  }
-  .note {
-    font-size: 11.5px;
   }
   .state {
     display: flex;

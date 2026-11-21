@@ -257,6 +257,83 @@ async fn run(
     Ok(())
 }
 
+/* ---------------- 更换加载器 ---------------- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeLoaderRequest {
+    pub task_id: String,
+    pub game_dir: String,
+    /// 要改的版本
+    pub name: String,
+    /// 新的加载器；None = 改回原版
+    pub loader: Option<LoaderReq>,
+    pub source: Source,
+    pub threads: usize,
+}
+
+/// 给已有的版本换加载器（或换加载器版本）：Mod、存档、配置都留着，只换版本 JSON。
+/// 做法：先按新加载器装一个临时版本，成功后把它的 JSON 换进原版本，再删掉临时版本。
+pub async fn change_loader(ctx: &TaskCtx, req: &ChangeLoaderRequest) -> Result<()> {
+    let game_dir = PathBuf::from(&req.game_dir);
+    installed::check_plain_name(&req.name)?;
+    let info = installed::list(&game_dir)?
+        .into_iter()
+        .find(|v| v.name == req.name)
+        .ok_or_else(|| anyhow!("找不到版本 {}", req.name))?;
+    let vdir = game_dir.join("versions").join(&req.name);
+    let tmp_name = format!(".imcl-loader-{}", req.task_id);
+    let tmp_dir = game_dir.join("versions").join(&tmp_name);
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    let inst = InstallRequest {
+        task_id: req.task_id.clone(),
+        game_dir: req.game_dir.clone(),
+        name: tmp_name.clone(),
+        mc: info.mc.clone(),
+        loader: req.loader.clone(),
+        optifine: None,
+        source: req.source,
+        threads: req.threads,
+    };
+    install(ctx, &inst).await?;
+
+    let r = (|| -> Result<()> {
+        // 新 JSON 改回原版本的名字；旧的留一份备份
+        let mut json: Value = serde_json::from_slice(&std::fs::read(tmp_dir.join(format!("{tmp_name}.json")))?)?;
+        json["id"] = json!(req.name);
+        let json_path = vdir.join(format!("{}.json", req.name));
+        if json_path.is_file() {
+            std::fs::copy(&json_path, vdir.join(format!("{}.json.imcl-bak", req.name)))?;
+        }
+        std::fs::write(&json_path, serde_json::to_vec_pretty(&json)?)?;
+        // 游戏本体：原来没有（比如继承自别的版本）就用新下载的
+        let jar = vdir.join(format!("{}.jar", req.name));
+        if !jar.is_file() {
+            std::fs::copy(tmp_dir.join(format!("{tmp_name}.jar")), &jar)?;
+        }
+        // 版本信息：原来没有 amc.json（别的启动器装的）要记住原来的隔离设置，不然 Mod 的位置会变
+        let meta_path = vdir.join("amc.json");
+        let had_meta = meta_path.is_file();
+        let mut meta: Value = std::fs::read(&meta_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| json!({}));
+        meta["mc"] = json!(info.mc);
+        meta["loader"] = json!(req.loader.as_ref().map(|l| l.kind.label()));
+        meta["loaderVersion"] = json!(req.loader.as_ref().map(|l| l.id.clone()));
+        meta["optifine"] = Value::Null;
+        std::fs::write(&meta_path, serde_json::to_vec_pretty(&meta)?)?;
+        if !had_meta {
+            let mut vs = installed::read_settings(&game_dir, &req.name).unwrap_or_default();
+            if vs.isolation.is_none() {
+                vs.isolation = Some(info.isolated);
+                installed::write_settings(&game_dir, &req.name, &vs)?;
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    r.context("替换版本文件失败")
+}
+
 async fn fabric_like(ctx: &TaskCtx, env: &InstallEnv<'_>, profile_url: &str) -> Result<Value> {
     let profile: Value = net::get_json(profile_url, env.src).await.context("获取加载器配置失败")?;
     net::download_all(json::libraries_items(&profile, env.libdir, env.src), env.threads, ctx).await?;
@@ -277,5 +354,50 @@ mod tests {
         assert!(validate_name(&dir, "a/b").is_err());
         assert!(validate_name(&dir, "a:b").is_err());
         assert!(validate_name(&dir, "..").is_err());
+    }
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    /// 装个原版，换成 Fabric，再换回原版（要联网下载整个游戏，手动跑）
+    #[tokio::test]
+    #[ignore]
+    async fn change_loader_live() {
+        let root = std::env::temp_dir().join(format!("amc-cl-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let g = root.to_string_lossy().to_string();
+        let ctx = TaskCtx::new("cl".into(), Arc::new(AtomicBool::new(false)), 5);
+        install(&ctx, &InstallRequest { task_id: "a".into(), game_dir: g.clone(), name: "V".into(), mc: "1.20.1".into(), loader: None, optifine: None, source: Source::Bmcl, threads: 32 })
+            .await
+            .unwrap();
+        // 版本里放个“Mod”，换加载器后应该还在
+        let mods = root.join("versions/V/mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("keep.jar"), b"x").unwrap();
+
+        let fabric = LoaderReq { kind: LoaderKind::Fabric, id: "0.15.7".into() };
+        change_loader(&ctx, &ChangeLoaderRequest { task_id: "b".into(), game_dir: g.clone(), name: "V".into(), loader: Some(fabric), source: Source::Bmcl, threads: 32 })
+            .await
+            .unwrap();
+        let info = installed::list(&root).unwrap().into_iter().find(|v| v.name == "V").unwrap();
+        println!("换成：{:?} {:?}", info.loader, info.loader_version);
+        assert_eq!(info.loader.as_deref(), Some("Fabric"));
+        let json: Value = serde_json::from_slice(&std::fs::read(root.join("versions/V/V.json")).unwrap()).unwrap();
+        assert_eq!(json["id"], "V");
+        assert!(json["mainClass"].as_str().unwrap().contains("fabric"));
+        assert!(mods.join("keep.jar").is_file());
+        assert!(!root.join("versions/.imcl-loader-b").exists());
+
+        change_loader(&ctx, &ChangeLoaderRequest { task_id: "c".into(), game_dir: g, name: "V".into(), loader: None, source: Source::Bmcl, threads: 32 })
+            .await
+            .unwrap();
+        let info = installed::list(&root).unwrap().into_iter().find(|v| v.name == "V").unwrap();
+        assert_eq!(info.loader, None);
+        assert!(mods.join("keep.jar").is_file());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

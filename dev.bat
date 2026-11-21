@@ -3,6 +3,9 @@ chcp 65001 >nul
 title IMCL (dev)
 cd /d "%~dp0"
 
+rem 系统 PATH 里有个多余的引号，会让 tauri 找不到 cargo；只在这个窗口里去掉，不改系统设置
+set "PATH=%PATH:"=%"
+
 rem 第一次运行先装依赖
 if not exist "node_modules" (
   echo 第一次运行，正在安装依赖...

@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { RotateCcw, Info } from "@lucide/svelte";
+  import { fill } from "$lib/theme";
+  import { RotateCcw, Info, Trash2, LoaderCircle } from "@lucide/svelte";
   import Select from "$lib/components/Select.svelte";
-  import { library, settings, accounts, javas, javaOptions, ACCOUNT_LABELS, WINDOW_LABELS, fmtMem, nav } from "$lib/state.svelte";
+  import { library, settings, accounts, javas, javaOptions, ACCOUNT_LABELS, WINDOW_LABELS, fmtMem, nav, memory, game, installs, toast } from "$lib/state.svelte";
   import type { VersionSettings } from "$lib/api";
   import type { Pack } from "$lib/mock";
 
@@ -34,15 +35,19 @@
       ...accounts.list.map((a) => ({ value: a.id, label: a.name, hint: ACCOUNT_LABELS[a.type], group: "我的账户" })),
     ];
     if (vs.account && !accounts.list.some((a) => a.id === vs.account))
-      opts.push({ value: vs.account, label: "账户已删除", hint: "启动时会用全局账户" });
+      opts.push({ value: vs.account, label: "账户已删除", hint: "" });
     return opts;
   });
 
-  /* 内存：拖动时只改草稿，松手再保存 */
+  /* 内存：null 跟随全局，0 自动分配，其他是手动分配的 MB；拖动时只改草稿，松手再保存 */
+  const plan = $derived(memory.plan(pack.name));
+  const memMax = $derived(plan?.maxMb ?? 16384);
+  const memMode = $derived(vs.memory == null ? "global" : vs.memory === 0 ? "auto" : "manual");
   let memDraft = $state(4096);
   $effect(() => {
-    memDraft = vs.memory ?? settings.memory;
+    memDraft = Math.min(vs.memory || settings.memory, memMax);
   });
+  const globalMem = $derived(settings.memoryMode === "auto" ? "自动分配" : fmtMem(Math.min(settings.memory, memMax)));
 
   /* 窗口 */
   const windowOpts = $derived([
@@ -58,6 +63,34 @@
 
   const isolated = $derived(pack.isolated ?? true);
 
+  /* 删除版本：点一次变成“再点一次确认”，3 秒内再点才删；正在运行、正在换加载器时不能删 */
+  let confirmDelete = $state(false);
+  let deleting = $state(false);
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  const running = $derived(game.status !== "idle" && game.packId === pack.id);
+  const changingLoader = $derived(Object.values(installs.tasks).some((t) => t.loaderFor === pack.name && t.status !== "error"));
+  async function deleteVersion() {
+    if (deleting || running || changingLoader) return;
+    if (!confirmDelete) {
+      confirmDelete = true;
+      clearTimeout(confirmTimer);
+      confirmTimer = setTimeout(() => (confirmDelete = false), 3000);
+      return;
+    }
+    clearTimeout(confirmTimer);
+    confirmDelete = false;
+    deleting = true;
+    const name = pack.name;
+    try {
+      await library.deleteVersion(pack);
+      toast.show(`已把「${name}」移到回收站`);
+    } catch (e) {
+      toast.show(String(e));
+    } finally {
+      deleting = false;
+    }
+  }
+
   function resetAll() {
     save({ java: null, memory: null, account: null, windowMode: null, jvmArgs: null, isolation: null });
   }
@@ -71,7 +104,7 @@
       {:else}
         <span class="badge gray">全部跟随全局</span>
       {/if}
-      <span class="faint">只对 {pack.name} 生效，修改后自动保存</span>
+      <span class="faint">只对 {pack.name} 生效</span>
     </p>
     <div class="vs-head-actions">
       <button class="btn btn-sm" onclick={() => nav.go("settings")}>全局设置</button>
@@ -84,7 +117,7 @@
   <section class="group">
     <h3>启动</h3>
     <div class="row">
-      <div class="lbl"><b>Java</b><span>老版本（1.16 及以前）一般要 Java 8，新版本要 Java 17 / 21</span></div>
+      <div class="lbl"><b>Java</b></div>
       <div class="ctl">
         <Select
           value={vs.java ?? ""}
@@ -97,7 +130,7 @@
       </div>
     </div>
     <div class="row">
-      <div class="lbl"><b>启动账户</b><span>启动这个版本时用的账户</span></div>
+      <div class="lbl"><b>启动账户</b></div>
       <div class="ctl">
         <Select
           value={vs.account ?? ""}
@@ -110,28 +143,35 @@
       </div>
     </div>
     <div class="row">
-      <div class="lbl"><b>最大内存</b><span>{vs.memory == null ? `跟随全局（${fmtMem(settings.memory)}）` : "整合包 Mod 多时可以调大"}</span></div>
+      <div class="lbl"><b>内存分配</b>{#if memMode === "global"}<span>跟随全局（{globalMem}）</span>{/if}</div>
       <div class="ctl">
         <div class="seg">
-          <button class:on={vs.memory == null} onclick={() => save({ memory: null })}>跟随全局</button>
-          <button class:on={vs.memory != null} onclick={() => vs.memory == null && save({ memory: settings.memory })}>自定义</button>
+          <button class:on={memMode === "global"} onclick={() => save({ memory: null })}>跟随全局</button>
+          <button class:on={memMode === "auto"} onclick={() => save({ memory: 0 })}>自动分配</button>
+          <button class:on={memMode === "manual"} onclick={() => memMode !== "manual" && save({ memory: memDraft })}>手动分配</button>
         </div>
       </div>
     </div>
-    {#if vs.memory != null}
+    {#if memMode !== "global"}
       <div class="row sub">
-        <div class="lbl"><span>拖动调整，建议不超过电脑内存的一半</span></div>
+        <div class="lbl"></div>
         <div class="ctl">
-          <input
-            type="range"
-            min="1024"
-            max="16384"
-            step="512"
-            bind:value={memDraft}
-            onchange={() => save({ memory: memDraft })}
-            aria-label="最大内存"
-          />
-          <span class="val">{fmtMem(memDraft)}</span>
+          {#if memMode === "auto"}
+            <input type="range" class="locked" min="1024" max={memMax} step="512" value={plan?.autoMb ?? 1024} use:fill={[plan?.autoMb, memMax]} disabled aria-label="内存占用" />
+            <span class="val">{plan ? fmtMem(plan.autoMb) : "…"}</span>
+          {:else}
+            <input
+              type="range"
+              min="1024"
+              max={memMax}
+              step="512"
+              bind:value={memDraft}
+              use:fill={[memDraft, memMax]}
+              onchange={() => save({ memory: memDraft })}
+              aria-label="内存占用"
+            />
+            <span class="val">{fmtMem(memDraft)}</span>
+          {/if}
         </div>
       </div>
     {/if}
@@ -148,7 +188,7 @@
       </div>
     </div>
     <div class="row">
-      <div class="lbl"><b>JVM 参数</b><span>填了就替换全局的 JVM 参数，留空跟随全局</span></div>
+      <div class="lbl"><b>JVM 参数</b><span>留空跟随全局</span></div>
       <div class="ctl">
         <input
           class="input mono"
@@ -169,9 +209,7 @@
       <div class="lbl">
         <b>版本隔离</b>
         <span>
-          {isolated
-            ? "Mod、存档、配置都放在这个版本自己的文件夹里，和其他版本互不影响"
-            : "和其他没隔离的版本共用游戏目录里的 mods、saves 等文件夹"}
+          {isolated ? "Mod、存档、配置和其他版本分开" : "和其他版本共用 Mod、存档、配置"}
         </span>
       </div>
       <div class="ctl">
@@ -184,6 +222,22 @@
           aria-label="版本隔离"
           onclick={() => save({ isolation: !isolated })}
         ></button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="lbl">
+        <b>删除版本</b>
+        <span>
+          {#if running}游戏正在运行，关掉后才能删除
+          {:else if changingLoader}正在更换加载器，完成后才能删除
+          {:else if isolated}整个版本文件夹移到回收站，包括它自己的 Mod、存档和配置
+          {:else}版本文件夹移到回收站，共用的 Mod 和存档不受影响{/if}
+        </span>
+      </div>
+      <div class="ctl">
+        <button class="btn btn-sm del" class:confirm={confirmDelete} onclick={deleteVersion} disabled={deleting || running || changingLoader}>
+          {#if deleting}<LoaderCircle size={14} class="spin" />正在删除{:else if confirmDelete}再点一次确认删除{:else}<Trash2 size={14} />删除{/if}
+        </button>
       </div>
     </div>
   </section>
@@ -231,6 +285,7 @@
     padding: 10px 14px;
     min-height: 56px;
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     border-bottom-width: 0;
   }
@@ -248,6 +303,14 @@
     min-height: 44px;
     padding-top: 0;
     border-top: 0;
+  }
+  .del:not(:disabled):hover,
+  .del.confirm {
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .del.confirm {
+    background: var(--red-soft);
   }
   .lbl {
     display: flex;

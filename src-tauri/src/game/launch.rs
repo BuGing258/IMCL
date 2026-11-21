@@ -33,7 +33,7 @@ pub struct LaunchRequest {
     pub name: String,
     /// java(w).exe 路径，或 "auto"
     pub java: String,
-    /// 最大内存（MB）
+    /// 最大内存（MB）；0 表示自动分配
     pub memory: u32,
     /// "default" / "720p" / "fullscreen"
     pub window_mode: String,
@@ -45,7 +45,12 @@ pub struct LaunchRequest {
     /// 微软账户 id；为空表示离线账户
     #[serde(default)]
     pub ms_account: Option<String>,
-    /// 以下由后端在正版登录后填写
+    /// 离线账户的皮肤：有的话用 authlib-injector 让游戏里也显示
+    #[serde(default)]
+    pub offline_skin: Option<crate::ygg::OfflineSkin>,
+    /// 以下由后端填写
+    #[serde(skip)]
+    pub agent_args: Vec<String>,
     #[serde(skip)]
     pub uuid: Option<String>,
     #[serde(skip)]
@@ -439,7 +444,7 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
         ("auth_session", token),
         ("auth_xuid", "0".into()),
         ("clientid", "0".into()),
-        ("user_type", if online { "msa" } else { "legacy" }.into()),
+        ("user_type", if online { "msa" } else if !req.agent_args.is_empty() { "mojang" } else { "legacy" }.into()),
         ("user_properties", "{}".into()),
         ("version_type", "IMCL".into()),
         ("launcher_name", "IMCL".into()),
@@ -454,7 +459,10 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
     ]);
 
     let mut jvm: Vec<String> = vec![
-        format!("-Xmx{}m", req.memory.max(512)),
+        format!(
+            "-Xmx{}m",
+            if req.memory == 0 { crate::memory::plan(&game_dir, Some(&req.name)).auto_mb } else { req.memory.max(512) }
+        ),
         "-XX:+UseG1GC".into(),
         "-XX:-UseAdaptiveSizePolicy".into(),
         "-XX:-OmitStackTraceInFastThrow".into(),
@@ -464,6 +472,8 @@ pub async fn prepare(ctx: &TaskCtx, req: &LaunchRequest) -> Result<Prepared> {
         "-Dstdout.encoding=UTF-8".into(),
         "-Dstderr.encoding=UTF-8".into(),
     ];
+    // 离线皮肤：authlib-injector
+    jvm.extend(req.agent_args.iter().cloned());
     // 官方的日志配置（老版本靠它修 Log4Shell 漏洞）
     if let Some((arg, path)) = &log_config {
         if path.is_file() {

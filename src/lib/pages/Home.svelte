@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { smooth, sheetIn } from "$lib/motion";
+  import { scrollWithin } from "$lib/theme";
+  import { Tween } from "svelte/motion";
   import { fly } from "svelte/transition";
   import { tick } from "svelte";
   import {
@@ -17,10 +20,12 @@
   import Tile from "$lib/components/Tile.svelte";
   import PackCover from "$lib/components/PackCover.svelte";
   import Avatar from "$lib/components/Avatar.svelte";
-  import { nav, library, game, settings, accounts, sysmon, installs, ACCOUNT_LABELS, fmtTime } from "$lib/state.svelte";
+  import { nav, library, game, settings, accounts, sysmon, installs, ACCOUNT_LABELS, fmtTime, fmtMem } from "$lib/state.svelte";
   import { api } from "$lib/api";
 
   let pickerOpen = $state(false);
+  /** 版本菜单的阴影（动画里会按进度调浓淡，见 motion.ts 的 sheetIn） */
+  const PICKER_SHADOW = "0 12px 32px rgba(0, 0, 0, 0.18)";
   let active = $state(0);
   let listEl = $state<HTMLDivElement>();
   const canSwitch = $derived(game.status === "idle");
@@ -79,7 +84,7 @@
   }
 
   function scrollActive(block: ScrollLogicalPosition = "nearest") {
-    listEl?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView({ block });
+    scrollWithin(listEl, listEl?.querySelector<HTMLElement>(`[data-i="${active}"]`), block === "center" ? "center" : "nearest");
   }
 
   function choose(id: string) {
@@ -125,6 +130,12 @@
       game.toggle();
     }
   }
+
+  /** 启动进度：数字和进度条平滑地追上真实进度，不会一跳一跳的 */
+  const prog = new Tween(0, { duration: 450, easing: smooth });
+  $effect(() => {
+    prog.set(game.status === "preparing" ? game.progress : 0, { duration: game.status === "preparing" ? 450 : 0 });
+  });
 </script>
 
 <svelte:window onkeydown={onKey} onclick={() => (pickerOpen = false)} />
@@ -150,7 +161,7 @@
           onwheel={onCardWheel}
           aria-haspopup="listbox"
           aria-expanded={pickerOpen}
-          title={canSwitch ? "点击选择版本，也可以在这里滚动滚轮切换" : "游戏运行中，不能切换版本"}
+          title={canSwitch ? "选择版本" : "游戏运行中，不能切换版本"}
         >
           <PackCover {pack} size={40} />
           <div class="pc-text">
@@ -174,7 +185,10 @@
 
       {#if pickerOpen && pack}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="picker" transition:fly={{ y: -6, duration: 160 }} onclick={(e) => e.stopPropagation()}>
+        <div class="picker" onclick={(e) => e.stopPropagation()}>
+          <div class="shade-clip"><div class="shade" in:sheetIn={{ shadow: PICKER_SHADOW }} out:sheetIn={{ duration: 160, shadow: PICKER_SHADOW }}></div></div>
+          <div class="clip">
+          <div class="sheet" in:sheetIn out:sheetIn={{ duration: 160 }}>
           <div class="pk-head">
             <span>选择版本</span>
             <span class="faint">共 {library.packs.length} 个</span>
@@ -202,6 +216,8 @@
             {/each}
           </div>
           <button class="pk more" onclick={() => nav.go("versions")}>管理版本…</button>
+          </div>
+          </div>
         </div>
       {/if}
     </div>
@@ -228,11 +244,11 @@
           <span>先装一个版本，装好就能开始</span>
         {:else if game.status === "idle"}
           <b>开始游戏</b>
-          <span>以 {account.name} 的身份进入 · 按 Enter 启动</span>
+          <span>以 {account.name} 的身份进入</span>
         {:else if game.status === "preparing"}
-          <b>{Math.round(game.progress)}%</b>
+          <b>{Math.round(prog.current)}%</b>
           <span>{game.step}{game.total > 1 ? ` ${game.done}/${game.total}` : ""}… · 点击取消</span>
-          <div class="bar"><div style:width="{game.progress}%"></div></div>
+          <div class="bar"><div style:width="{prog.current}%"></div></div>
         {:else if game.confirmStop}
           <b>强制关闭？</b>
           <span>再点一次关闭游戏，没保存的进度可能会丢失</span>
@@ -277,7 +293,7 @@
       i={4}
       icon={SettingsIcon}
       title="设置"
-      sub="{settings.memory / 1024} GB 内存"
+      sub={settings.memoryMode === "auto" ? "自动分配内存" : `${fmtMem(settings.memory)} 内存`}
       onclick={() => nav.go("settings")}
     />
     <Tile i={5} icon={Activity} title="系统状态" sub={monitorSub} class="c2">
@@ -313,7 +329,6 @@
     min-height: 0;
   }
   .hello {
-    animation: rise 0.5s var(--ease) backwards;
     padding: 4px 2px 2px;
   }
   .greet {
@@ -324,9 +339,9 @@
     font-size: 13px;
   }
 
+  /* 里面的版本卡片有材质，外层只能用 lift，见 app.css */
   .picker-wrap {
     position: relative;
-    animation: rise 0.5s var(--ease) 40ms backwards;
   }
   .pack-card {
     width: 100%;
@@ -336,9 +351,10 @@
     padding: 10px 14px 10px 10px;
     border-radius: var(--r-lg);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     color: var(--text-2);
-    transition: border-color 0.2s, box-shadow 0.2s;
+    transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
   }
   .pack-card:hover,
   .pack-card.open {
@@ -390,11 +406,36 @@
     left: 0;
     right: 0;
     z-index: 20;
+    /* 分层的原因见 motion.ts */
+  }
+  /* 不动的裁剪框：上沿和菜单上沿对齐，左右下各留 60px 给阴影 */
+  .shade-clip {
+    position: absolute;
+    inset: 0 -60px -60px -60px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .shade {
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 60px;
+    bottom: 60px;
+    border-radius: var(--r-lg);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  }
+  .clip {
+    position: relative;
+    border-radius: var(--r-lg);
+    overflow: hidden;
+  }
+  /* 版本菜单和首页卡片用同一套材质（设置里的“卡片材质”） */
+  .sheet {
     padding: 6px;
     border-radius: var(--r-lg);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border-strong);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   }
   .pk-head {
     display: flex;
@@ -475,16 +516,33 @@
     justify-content: space-between;
     padding: 20px 22px;
     border-radius: var(--r-lg);
-    background: var(--red);
-    color: #fff;
-    box-shadow: 0 10px 28px rgba(239, 50, 61, 0.3);
-    transition: background 0.2s, transform 0.25s var(--ease), box-shadow 0.25s;
-    animation: rise 0.55s var(--ease) 80ms backwards;
+    background-color: var(--red);
+    /* 左上亮、右下暗，有点立体感 */
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 45%, rgba(0, 0, 0, 0.14));
+    color: var(--on-red);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--red) 30%, transparent);
+    transition:
+      background-color 0.2s var(--ease),
+      transform 0.35s var(--ease-spring),
+      box-shadow 0.3s var(--ease);
+  }
+  /* 鼠标移上去时一道光扫过 */
+  .start::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.22) 46%, transparent 62%);
+    transform: translateX(-110%);
+    transition: transform 0.9s var(--ease);
+    pointer-events: none;
+  }
+  .start:hover::before {
+    transform: translateX(110%);
   }
   .start:hover {
-    background: var(--red-hover);
+    background-color: var(--red-hover);
     transform: translateY(-2px);
-    box-shadow: 0 14px 34px rgba(239, 50, 61, 0.38);
+    box-shadow: 0 14px 34px color-mix(in srgb, var(--red) 38%, transparent);
   }
   .start:active {
     transform: scale(0.985);
@@ -517,17 +575,6 @@
   }
   .start:hover .start-wm {
     transform: rotate(-18deg) scale(1.04);
-  }
-  .preparing .start-wm {
-    animation: swing 0.7s ease-in-out infinite alternate;
-  }
-  @keyframes swing {
-    from {
-      transform: rotate(-30deg);
-    }
-    to {
-      transform: rotate(6deg);
-    }
   }
   .start-text {
     position: relative;
@@ -562,7 +609,6 @@
     height: 100%;
     background: #fff;
     border-radius: 3px;
-    transition: width 0.1s linear;
   }
   .live {
     width: 10px;
@@ -592,7 +638,6 @@
     flex-direction: column;
     gap: 8px;
     padding-top: 4px;
-    border-top: 1px solid var(--border);
   }
   .acc :global(.px) {
     margin-top: 8px;
@@ -648,7 +693,7 @@
   .g-bar div {
     height: 100%;
     border-radius: 3px;
-    transition: width 0.9s var(--ease), background 0.4s;
+    transition: width 0.9s var(--ease), background 0.4s var(--ease);
   }
   .g-bar.lo div {
     background: var(--green);

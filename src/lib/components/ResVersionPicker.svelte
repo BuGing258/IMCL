@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { scrollWithin } from "$lib/theme";
   // 安装 / 重新安装前选资源的版本。
   // Mod、光影、材质包：只列适合目标游戏版本的版本，Mod 还会列出前置。
   // 整合包：列出全部版本，装成一个新的游戏版本，所以要填版本名称。
-  import { fade, scale } from "svelte/transition";
+  import Modal from "./Modal.svelte";
   import { X, LoaderCircle, RefreshCw, Check, Download as DownloadIcon, Info, Link2, TriangleAlert } from "@lucide/svelte";
   import { api, checkVersionName, type Hit, type ModVersion, type ResDep, type ResKindApi } from "$lib/api";
   import { fmtCount, library, settings } from "$lib/state.svelte";
@@ -157,40 +158,28 @@
 
   function onKey(e: KeyboardEvent) {
     if (!active) return;
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      onclose();
-    } else if (e.key === "Enter" && pick && !(e.target instanceof HTMLButtonElement)) {
+    if (e.key === "Enter" && pick && !(e.target instanceof HTMLButtonElement)) {
       confirm();
     } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && shown.length && !(e.target instanceof HTMLInputElement)) {
       e.preventDefault();
       const i = shown.findIndex((v) => v.id === selected);
       const n = Math.max(0, Math.min(shown.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
       selected = shown[n].id;
-      document.getElementById(`rv-${hit.id}-${shown[n].id}`)?.scrollIntoView({ block: "nearest" });
+      const row = document.getElementById(`rv-${hit.id}-${shown[n].id}`);
+      scrollWithin(row?.closest<HTMLElement>(".list"), row);
     }
   }
 </script>
 
 <svelte:window onkeydowncapture={onKey} />
 
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="mask" transition:fade={{ duration: 150 }} onclick={onclose}>
-  <div
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="rv-title-{hit.id}"
-    tabindex="-1"
-    transition:scale={{ start: 0.96, duration: 180 }}
-    onclick={(e) => e.stopPropagation()}
-  >
+<Modal {onclose} {active} width={600} labelledby="rv-title-{hit.id}">
     <header>
       {#if hit.icon}<img class="ic" src={hit.icon} alt="" />{:else}<span class="ic ph">{hit.title[0]}</span>{/if}
       <div class="ht">
         <h2 id="rv-title-{hit.id}">{isPack ? "安装整合包" : reinstall ? "重新安装" : "安装"} {hit.title}</h2>
         <p>
-          {#if isPack}会新建一个游戏版本，自动装好对应的游戏、加载器和里面的 Mod{:else}装到 {target} · 只列出适合 {mc}{loader ? ` ${loader}` : ""} 的版本{/if}
+          {#if isPack}会新建一个游戏版本{:else}装到 {target}{/if}
         </p>
       </div>
       <button class="btn btn-sm btn-icon" onclick={onclose} aria-label="关闭"><X size={15} /></button>
@@ -199,7 +188,7 @@
     {#if reinstall}
       <div class="installed">
         <Check size={14} />
-        <span>已安装 <b>{installedVersion || "（版本未知）"}</b>。重新安装会用选中的版本替换它，旧文件会移到回收站。</span>
+        <span>已安装 <b>{installedVersion || "（版本未知）"}</b>，旧文件会移到回收站</span>
       </div>
     {/if}
 
@@ -253,7 +242,7 @@
           />
         </label>
         {#if nameTouched && nameErr}<p class="err-text">{nameErr}</p>{/if}
-        <p class="faint">会装 {packInfo(pick)}，整合包的 Mod 和配置都放在这个版本自己的文件夹里，不影响别的版本。</p>
+        <p class="faint">Minecraft {packInfo(pick)}</p>
       </section>
     {/if}
 
@@ -269,7 +258,7 @@
           {/if}
           <span class="sp"></span>
           {#if deps.length}
-            <label class="auto" title="开启后，安装时会把还没装的前置（和前置的前置）一起装上">
+            <label class="auto">
               <input type="checkbox" bind:checked={settings.autoDeps} />自动安装前置
             </label>
           {/if}
@@ -291,7 +280,7 @@
                 {:else if dv != null}
                   <button class="btn btn-sm" onclick={() => onpickdep(d, dv)} title="换个版本或重新下载">重新安装</button>
                 {:else if !d.available}
-                  <span class="badge amber" title="这个前置没有适合 {mc} 的版本，装上主 Mod 也可能进不了游戏"><TriangleAlert size={11} />没有合适的版本</span>
+                  <span class="badge amber" title="没有适合 {mc} 的版本"><TriangleAlert size={11} />没有合适的版本</span>
                 {:else if settings.autoDeps}
                   <span class="badge gray">会一起安装</span>
                 {:else}
@@ -321,32 +310,9 @@
         {#if isPack}安装整合包{:else if pick && same(pick)}重新安装这个版本{:else if reinstall}换成 {pick?.versionNumber ?? "…"}{:else}安装 {pick?.versionNumber ?? ""}{/if}{#if withCount && !isPack}（含 {withCount} 个前置）{/if}
       </button>
     </footer>
-  </div>
-</div>
+  </Modal>
 
 <style>
-  .mask {
-    position: fixed;
-    inset: 0;
-    z-index: 1500;
-    background: rgba(0, 0, 0, 0.35);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .dialog {
-    width: min(600px, 100%);
-    max-height: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px 18px;
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
-  }
   header {
     display: flex;
     align-items: center;
@@ -432,8 +398,8 @@
     text-align: left;
     font-size: 12px;
     transition:
-      background 0.12s,
-      border-color 0.12s;
+      background 0.12s var(--ease),
+      border-color 0.12s var(--ease);
   }
   .row:hover {
     background: var(--hover);
@@ -448,7 +414,7 @@
     border-radius: 50%;
     border: 1.5px solid var(--border-strong);
     flex-shrink: 0;
-    transition: border 0.12s;
+    transition: border 0.12s var(--ease);
   }
   .row.on .radio {
     border: 4px solid var(--red);
@@ -525,9 +491,6 @@
     font-size: 12px;
     color: var(--text-2);
     cursor: pointer;
-  }
-  .auto input {
-    accent-color: var(--red);
   }
   .box ul {
     list-style: none;
@@ -610,9 +573,6 @@
     font-size: 12px;
     color: var(--text-2);
     cursor: pointer;
-  }
-  .only input {
-    accent-color: var(--red);
   }
   footer .faint {
     display: inline-flex;

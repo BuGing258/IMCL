@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { smooth } from "$lib/motion";
   import { slide } from "svelte/transition";
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -166,7 +167,7 @@
           {#each accounts.list as a (a.id)}
             {@const isCur = a.id === accounts.currentId}
             {@const open = skinFor === a.id}
-            <li class:on={isCur} transition:slide={{ duration: 200 }}>
+            <li class:on={isCur} transition:slide={{ duration: 260, easing: smooth }}>
              <div class="row">
               <span class="av" title={a.type === "microsoft" ? "正版皮肤，在 minecraft.net 上更换后这里会跟着变" : undefined}>
                 <Avatar account={a} size={40} />
@@ -199,7 +200,7 @@
              </div>
               {#if open}
                 {@const cur = a.skin ?? "steve"}
-                <div class="skins" transition:slide={{ duration: 180 }}>
+                <div class="skins" transition:slide={{ duration: 240, easing: smooth }}>
                   <div class="sk-row">
                     <button class="sk" class:on={cur === "steve"} onclick={() => choose(a, "steve")}>
                       <Avatar src={skins.steve} name="Steve" size={34} /><span>Steve</span>
@@ -219,10 +220,16 @@
                       <button class="link up" onclick={() => pickFile(a.id)}><Upload size={12} />换一张</button>
                     {/if}
                   </div>
-                  <p class="faint">
-                    {#if !skins.steve}装好任意一个游戏版本后，这里会显示游戏自带的 Steve 和 Alex。{/if}
-                    离线皮肤只显示在启动器里，进游戏后还是默认皮肤。
-                  </p>
+                  {#if cur === "custom" && a.skinData}
+                    <div class="model">
+                      <span>手臂</span>
+                      <div class="seg">
+                        <button class:on={!a.skinSlim} onclick={() => accounts.setSlim(a.id, false)}>粗（Steve）</button>
+                        <button class:on={!!a.skinSlim} onclick={() => accounts.setSlim(a.id, true)}>细（Alex）</button>
+                      </div>
+                    </div>
+                  {/if}
+                  {#if !skins.steve}<p class="faint">装好任意一个游戏版本后，这里会显示游戏自带的 Steve 和 Alex。</p>{/if}
                 </div>
               {/if}
             </li>
@@ -240,7 +247,7 @@
 
         {#if addType === "offline"}
           <form onsubmit={addOffline} novalidate>
-            <p class="hint">不需要联网，适合单人和局域网游戏。名字会显示在游戏里。</p>
+            <p class="hint">不用联网，适合单人和局域网</p>
             <div class="field">
               <input
                 class="input"
@@ -256,7 +263,7 @@
             {#if nameErr}<p class="err-text">{nameErr}</p>{/if}
           </form>
         {:else if addType === "microsoft"}
-          <p class="hint">用购买了 Minecraft 的微软账户登录，可以进正版服务器，显示正版皮肤。</p>
+          <p class="hint">用买了 Minecraft 的微软账户登录</p>
           {#if code}
             <div class="code-box">
               <p>在打开的网页里输入这个代码（已经复制好了）：</p>
@@ -279,7 +286,7 @@
             {#if settings.msClientId}<span class="badge green">已填写</span>{:else}<span class="badge amber">未填写</span>{/if}
           </button>
           {#if showClientId}
-            <div class="cid" transition:slide={{ duration: 180 }}>
+            <div class="cid" transition:slide={{ duration: 240, easing: smooth }}>
               <input
                 class="input mono"
                 placeholder="00000000-0000-0000-0000-000000000000"
@@ -301,7 +308,7 @@
           {/if}
         {:else}
           <form onsubmit={addAuthlib} novalidate>
-            <p class="hint">用皮肤站之类的第三方认证服务器登录（authlib-injector）。</p>
+            <p class="hint">用皮肤站账户登录</p>
             <div class="field">
               <input
                 class="input"
@@ -317,7 +324,7 @@
           </form>
         {/if}
 
-        <p class="note"><Info size={13} />账户数据只保存在这台电脑上，正版登录令牌不会发给任何第三方</p>
+        <p class="note"><Info size={13} />账户信息只保存在这台电脑上</p>
       </section>
     </div>
   </div>
@@ -336,10 +343,6 @@
   }
   .card {
     padding: 16px 18px;
-    animation: rise 0.45s var(--ease) backwards;
-  }
-  .add {
-    animation-delay: 70ms;
   }
   h2 {
     display: flex;
@@ -361,7 +364,7 @@
     padding: 8px 10px;
     border-radius: var(--r);
     border: 1px solid transparent;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
   }
   .list li:hover {
     background: var(--hover);
@@ -406,7 +409,7 @@
     background: var(--surface);
     font-size: 11.5px;
     color: var(--text-2);
-    transition: border-color 0.15s, color 0.15s;
+    transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
   }
   .sk:hover {
     border-color: var(--text-3, var(--text-2));
@@ -427,6 +430,19 @@
   }
   .up {
     margin-left: 4px;
+  }
+  .model {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .model .seg button {
+    height: 24px;
+    font-size: 12px;
+    padding: 0 10px;
   }
   .skins .faint {
     margin-top: 6px;

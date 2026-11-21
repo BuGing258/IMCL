@@ -16,6 +16,7 @@
 </script>
 
 <script lang="ts">
+  import { scrollWithin } from "$lib/theme";
   import { ChevronDown, Check, Plus } from "@lucide/svelte";
   import { tick } from "svelte";
 
@@ -56,6 +57,23 @@
   let pos = $state({ left: 0, top: 0, width: 0, maxHeight: 280, up: false });
 
   const selected = $derived(options.find((o) => o.value === value));
+
+  // 选中的文字被截断时，悬停才显示完整内容
+  let valEl = $state<HTMLSpanElement>();
+  let cut = $state(false);
+  function measure() {
+    cut = !!valEl && valEl.scrollWidth > valEl.clientWidth + 1;
+  }
+  $effect(() => {
+    void selected?.label;
+    void selected?.hint;
+    const el = valEl;
+    if (!el) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  });
   /** 键盘可以走到的条目：选项 + 底部操作 */
   const count = $derived(options.length + actions.length);
   const enabledAt = (i: number) => i >= options.length || !options[i].disabled;
@@ -118,7 +136,7 @@
   }
 
   function scrollToActive() {
-    list?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest" });
+    scrollWithin(list, list?.querySelector<HTMLElement>(`[data-i="${active}"]`));
   }
 
   function onKey(e: KeyboardEvent) {
@@ -208,11 +226,11 @@
   aria-expanded={open}
   aria-controls={uid}
   aria-activedescendant={open && active >= 0 ? `${uid}-${active}` : undefined}
-  title={selected ? selected.label + (selected.hint ? ` ${selected.hint}` : "") : undefined}
+  data-tip={cut && selected ? selected.label + (selected.hint ? ` ${selected.hint}` : "") : undefined}
   onclick={() => (open ? hide() : show())}
   onkeydown={onKey}
 >
-  <span class="val" class:ph={!selected}>
+  <span class="val" class:ph={!selected} bind:this={valEl}>
     {selected?.label ?? placeholder}
     {#if selected?.hint}<span class="hint">{selected.hint}</span>{/if}
   </span>
@@ -220,18 +238,24 @@
 </button>
 
 {#if open}
+  <!-- 外层只定位；阴影、圆角裁剪、材质分在三层上（原因见 motion.ts） -->
   <div
     use:portal
-    bind:this={list}
-    id={uid}
     class="pop"
     class:up={pos.up}
     class:mono
-    role="listbox"
-    tabindex="-1"
     style:left="{pos.left}px"
     style:top="{pos.top}px"
     style:min-width="{pos.width}px"
+  >
+  <div class="shade-clip"><div class="shade"></div></div>
+  <div class="clip">
+  <div
+    bind:this={list}
+    id={uid}
+    class="sheet"
+    role="listbox"
+    tabindex="-1"
     style:max-height="{pos.maxHeight}px"
   >
     {#each options as o, i (o.value)}
@@ -281,6 +305,8 @@
       {/each}
     {/if}
   </div>
+  </div>
+  </div>
 {/if}
 
 <style>
@@ -297,7 +323,7 @@
     color: var(--text);
     font-size: 13px;
     text-align: left;
-    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease), background 0.15s var(--ease);
   }
   .trigger.sm {
     height: 32px;
@@ -349,38 +375,86 @@
     color: var(--text-3);
   }
 
+  /* 外层：只定位 */
   .pop {
     position: fixed;
     z-index: 1000;
     max-width: min(480px, calc(100vw - 16px));
-    overflow-y: auto;
-    padding: 5px;
-    border-radius: var(--r);
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08);
     font-family: var(--font);
     color: var(--text);
-    transform-origin: top center;
-    animation: pop-in 0.16s var(--ease);
   }
   .pop.up {
     transform: translateY(-100%);
-    transform-origin: bottom center;
-    animation-name: pop-in-up;
   }
-  @keyframes pop-in {
+  /* 阴影层：和 sheet 一起滑，套在不动的 shade-clip 里，伸出菜单边沿的部分被裁掉，阴影跟着菜单长出来 */
+  .shade-clip {
+    position: absolute;
+    inset: 0 -60px -60px -60px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .pop.up .shade-clip {
+    inset: -60px -60px 0 -60px;
+  }
+  .shade {
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 60px;
+    bottom: 60px;
+    border-radius: var(--r);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08);
+    animation: shade-in 0.22s var(--ease);
+  }
+  .pop.up .shade {
+    top: 60px;
+    bottom: 0;
+    animation-name: shade-in-up;
+  }
+  /* 裁剪层：只裁圆角 */
+  .clip {
+    position: relative;
+    border-radius: var(--r);
+    overflow: hidden;
+  }
+  /* 内层：材质 + 滚动，只用 transform 从上沿（向上弹出时从下沿）滑进来，模糊全程都在 */
+  .sheet {
+    overflow-y: auto;
+    padding: 5px;
+    border-radius: var(--r);
+    background: var(--pop-bg);
+    backdrop-filter: var(--pop-filter);
+    border: 1px solid var(--border-strong);
+    animation: sheet-in 0.22s var(--ease);
+  }
+  .pop.up .sheet {
+    animation-name: sheet-in-up;
+  }
+  /* 阴影层：和菜单一起滑，阴影从无到有（菜单还藏着时阴影就露在裁剪框里，会是一截顶上被裁平的阴影） */
+  @keyframes shade-in {
     from {
-      opacity: 0;
-      transform: translateY(-4px) scale(0.98);
+      transform: translateY(calc(-100% - 2px));
+      box-shadow: 0 10px 32px rgba(0, 0, 0, 0), 0 2px 6px rgba(0, 0, 0, 0);
     }
   }
-  @keyframes pop-in-up {
+  @keyframes shade-in-up {
     from {
-      opacity: 0;
-      transform: translateY(calc(-100% + 4px)) scale(0.98);
+      transform: translateY(calc(100% + 2px));
+      box-shadow: 0 10px 32px rgba(0, 0, 0, 0), 0 2px 6px rgba(0, 0, 0, 0);
     }
   }
+  /* 多滑出 2px，避免停在裁剪边上留下一条细线 */
+  @keyframes sheet-in {
+    from {
+      transform: translateY(calc(-100% - 2px));
+    }
+  }
+  @keyframes sheet-in-up {
+    from {
+      transform: translateY(calc(100% + 2px));
+    }
+  }
+
   .opt {
     display: flex;
     align-items: center;

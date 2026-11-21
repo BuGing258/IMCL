@@ -250,6 +250,86 @@ pub async fn identify(game_dir: &Path, version: &str) -> Result<HashMap<String, 
     Ok(out)
 }
 
+/* ---------------- 检查更新 ---------------- */
+
+/// 一个有新版本的文件
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Update {
+    /// "mods/文件名"
+    pub file: String,
+    pub project_id: String,
+    pub title: String,
+    pub icon: Option<String>,
+    pub current: String,
+    /// 新版本
+    pub version_id: String,
+    pub version_number: String,
+}
+
+/// 检查某类资源（mod / shader / resourcepack）有没有适合这个游戏版本的新版本。禁用的 Mod 不检查
+pub async fn updates(game_dir: &Path, version: &str, kind: &str, mc: &str, loader: Option<&str>) -> Result<Vec<Update>> {
+    let folder = kind_folder(kind)?;
+    let files: Vec<(String, PathBuf)> = version_files(game_dir, version)?
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(&format!("{folder}/")) && !k.ends_with(".disabled"))
+        .collect();
+    if files.is_empty() {
+        return Ok(vec![]);
+    }
+    let hashed: Vec<(String, String)> =
+        tauri::async_runtime::spawn_blocking(move || files.into_iter().filter_map(|(k, p)| hash_cached(&p).map(|h| (k, h))).collect()).await?;
+    let hashes: Vec<&String> = hashed.iter().map(|(_, h)| h).collect();
+    let loaders: Vec<String> = match (kind, loader) {
+        ("mod", Some(l)) => mod_loaders(l),
+        ("resourcepack", _) => vec!["minecraft".into()],
+        _ => vec![],
+    };
+    let mut body = json!({ "hashes": hashes, "algorithm": "sha1", "game_versions": [mc] });
+    if !loaders.is_empty() {
+        body["loaders"] = json!(loaders);
+    }
+    let cur_body = json!({ "hashes": hashes, "algorithm": "sha1" });
+    let (current, latest) = futures_util::try_join!(
+        post::<HashMap<String, Value>>("/version_files", &cur_body),
+        post::<HashMap<String, Value>>("/version_files/update", &body),
+    )?;
+    let mut out: Vec<Update> = Vec::new();
+    for (file, hash) in &hashed {
+        let (Some(cur), Some(new)) = (current.get(hash), latest.get(hash)) else { continue };
+        if cur["id"] == new["id"] {
+            continue;
+        }
+        // 只算更新的（新版本发布时间更晚）
+        if new["date_published"].as_str() <= cur["date_published"].as_str() {
+            continue;
+        }
+        out.push(Update {
+            file: file.clone(),
+            project_id: new["project_id"].as_str().unwrap_or_default().to_string(),
+            title: String::new(),
+            icon: None,
+            current: cur["version_number"].as_str().unwrap_or_default().to_string(),
+            version_id: new["id"].as_str().unwrap_or_default().to_string(),
+            version_number: new["version_number"].as_str().unwrap_or_default().to_string(),
+        });
+    }
+    // 补上名字和图标
+    if !out.is_empty() {
+        let ids: Vec<&str> = out.iter().map(|u| u.project_id.as_str()).collect();
+        if let Ok(projects) = get::<Vec<Value>>("/projects", &[("ids", json!(ids).to_string())]).await {
+            for u in &mut out {
+                if let Some(p) = projects.iter().find(|p| p["id"].as_str() == Some(u.project_id.as_str())) {
+                    u.title = p["title"].as_str().unwrap_or_default().to_string();
+                    u.icon = p["icon_url"].as_str().filter(|x| !x.is_empty()).map(str::to_string);
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    Ok(out)
+}
+
 /* ---------------- 安装 ---------------- */
 
 #[derive(Debug, Deserialize)]
@@ -605,6 +685,55 @@ mod tests {
     }
 
     /// 联网测试：装 Iris（会自动带上它需要的前置），再识别出来
+    #[tokio::test]
+    #[ignore]
+    async fn updates_live() {
+        let root = std::env::temp_dir().join(format!("amc-up-{}", std::process::id()));
+        let vdir = root.join("versions").join("t");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("amc.json"), "{}").unwrap();
+        // 先装一个旧版 Sodium
+        let list = versions(&VersionsReq { project_id: "AANobbMI".into(), kind: "mod".into(), mc: "1.20.1".into(), loader: Some("Fabric".into()) })
+            .await
+            .unwrap();
+        let old = list.last().unwrap();
+        install(&InstallReq {
+            game_dir: root.to_string_lossy().into(),
+            version: "t".into(),
+            kind: "mod".into(),
+            project_id: "AANobbMI".into(),
+            mc: "1.20.1".into(),
+            loader: Some("Fabric".into()),
+            version_id: Some(old.id.clone()),
+            reinstall: false,
+            with_deps: false,
+        })
+        .await
+        .unwrap();
+        let ups = updates(&root, "t", "mod", "1.20.1", Some("Fabric")).await.unwrap();
+        println!("{ups:#?}");
+        assert_eq!(ups.len(), 1);
+        assert_eq!(ups[0].title, "Sodium");
+        assert_eq!(ups[0].current, old.version_number);
+        assert_ne!(ups[0].version_number, old.version_number);
+        // 按检查结果更新
+        install(&InstallReq {
+            game_dir: root.to_string_lossy().into(),
+            version: "t".into(),
+            kind: "mod".into(),
+            project_id: ups[0].project_id.clone(),
+            mc: "1.20.1".into(),
+            loader: Some("Fabric".into()),
+            version_id: Some(ups[0].version_id.clone()),
+            reinstall: true,
+            with_deps: true,
+        })
+        .await
+        .unwrap();
+        assert!(updates(&root, "t", "mod", "1.20.1", Some("Fabric")).await.unwrap().is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[tokio::test]
     #[ignore]
     async fn modrinth_install_live() {

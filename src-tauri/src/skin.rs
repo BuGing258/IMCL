@@ -49,9 +49,16 @@ pub fn is_skin(b: &[u8]) -> bool {
 }
 
 pub fn data_url(b: &[u8]) -> String {
+    data_url_of(b, "image/png")
+}
+
+/// 任意类型的 data URL
+pub fn data_url_of(b: &[u8], mime: &str) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut s = String::with_capacity(22 + b.len() * 4 / 3 + 4);
-    s.push_str("data:image/png;base64,");
+    let mut s = String::with_capacity(32 + b.len() * 4 / 3 + 4);
+    s.push_str("data:");
+    s.push_str(mime);
+    s.push_str(";base64,");
     for c in b.chunks(3) {
         let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
         s.push(T[(n >> 18) as usize & 63] as char);

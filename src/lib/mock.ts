@@ -1,7 +1,7 @@
 // 演示用假数据：界面预览阶段使用，接入后端后替换为真实数据源。
 import type { FileInfo, VersionSettings } from "./api";
 
-export type PackIcon = "sword" | "cube" | "leaf";
+export type PackIcon = "sword" | "cube" | "leaf" | "anvil" | "fabric" | "fox";
 export type Loader = "Fabric" | "Forge" | "NeoForge" | "Quilt" | "原版";
 
 export interface ModEntry {
@@ -47,13 +47,13 @@ export interface Pack {
 export function packLook(loader: string | null | undefined, optifine?: string | null): Pick<Pack, "color" | "icon"> {
   switch (loader) {
     case "Fabric":
-      return { color: "#C98A2B", icon: "cube" };
+      return { color: "#D4A429", icon: "fabric" };
     case "Quilt":
       return { color: "#7F77DD", icon: "cube" };
     case "Forge":
-      return { color: "#378ADD", icon: "sword" };
+      return { color: "#6B7280", icon: "anvil" };
     case "NeoForge":
-      return { color: "#D85A30", icon: "sword" };
+      return { color: "#E8702A", icon: "fox" };
     default:
       return optifine ? { color: "#E24B4A", icon: "leaf" } : { color: "#639922", icon: "leaf" };
   }
@@ -65,8 +65,8 @@ export const mockPacks: Pack[] = [
     name: "好友生存服",
     mc: "1.20.1",
     loader: "Fabric",
-    color: "#1D9E75",
-    icon: "sword",
+    color: "#D4A429",
+    icon: "fabric",
     lastPlayed: "昨天",
     mods: [
       { id: "fabric-api", name: "Fabric API", version: "0.92.2", size: "2.0 MB", enabled: true },
@@ -90,8 +90,8 @@ export const mockPacks: Pack[] = [
     name: "创造测试服",
     mc: "1.21.4",
     loader: "Fabric",
-    color: "#7F77DD",
-    icon: "cube",
+    color: "#D4A429",
+    icon: "fabric",
     lastPlayed: "3 天前",
     mods: [
       { id: "fabric-api", name: "Fabric API", version: "0.114.0", size: "2.2 MB", enabled: true },
@@ -108,7 +108,7 @@ export const mockPacks: Pack[] = [
     name: "原版 1.21.4",
     mc: "1.21.4",
     loader: "原版",
-    color: "#C98A2B",
+    color: "#639922",
     icon: "leaf",
     lastPlayed: "上周",
     mods: [],

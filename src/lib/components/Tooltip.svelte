@@ -11,6 +11,8 @@
   const DELAY = 450;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let target: HTMLElement | null = null;
+  /** 有提示时才监听元素被移除（onMount 里设置） */
+  let watchRemoval: (on: boolean) => void = () => {};
 
   /** 把原生 title 挪到 data-tip，避免系统自带的提示框也冒出来 */
   function tipOf(el: HTMLElement) {
@@ -25,6 +27,7 @@
   function hide() {
     clearTimeout(timer);
     visible = false;
+    if (target) watchRemoval(false);
     target = null;
   }
 
@@ -51,6 +54,7 @@
       hide();
       if (!tipOf(el)) return;
       target = el;
+      watchRemoval(true);
       timer = setTimeout(() => show(el), DELAY);
     };
     const out = (e: PointerEvent) => {
@@ -62,9 +66,9 @@
     window.addEventListener("wheel", hide, { passive: true });
     window.addEventListener("keydown", hide, true);
     window.addEventListener("blur", hide);
-    // 元素被移除（比如切换页面）时也要收起
+    // 元素被移除（比如切换页面）时也要收起；只在有提示时才盯着，平时不占资源
     const mo = new MutationObserver(() => target && !target.isConnected && hide());
-    mo.observe(document.body, { childList: true, subtree: true });
+    watchRemoval = (on) => (on ? mo.observe(document.body, { childList: true, subtree: true }) : mo.disconnect());
     return () => {
       window.removeEventListener("pointerover", over);
       window.removeEventListener("pointerout", out);
@@ -91,7 +95,8 @@
     max-width: 320px;
     padding: 5px 10px;
     border-radius: 8px;
-    background: var(--surface);
+    background: var(--pop-bg);
+    backdrop-filter: var(--pop-filter);
     color: var(--text);
     border: 1px solid var(--border-strong);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -106,15 +111,14 @@
     transform: translate(-50%, -100%);
     animation-name: tip-in-above;
   }
+  /* 只移动，不淡入（淡入会让背景模糊在动画期间消失） */
   @keyframes tip-in {
     from {
-      opacity: 0;
       transform: translate(-50%, -3px);
     }
   }
   @keyframes tip-in-above {
     from {
-      opacity: 0;
       transform: translate(-50%, calc(-100% + 3px));
     }
   }

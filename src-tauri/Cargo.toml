@@ -1,8 +1,9 @@
 [package]
 name = "imcl"
-version = "0.1.0"
+version = "1.5.0"
 description = "IMCL - a lightweight Minecraft launcher"
-authors = ["IMCL"]
+authors = ["IMCL contributors"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -32,6 +33,12 @@ zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "charset", "http2", "system-proxy", "json", "stream", "form", "query"] }
 tauri-plugin-dialog = "2"
 md-5 = "0.10"
+# 离线皮肤：本机皮肤服务器的签名
+rsa = { version = "0.9", features = ["pem"] }
+sha1 = { version = "0.10", features = ["oid"] }
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
 
 # 发布版体积/性能优化
 [profile.release]
@@ -42,7 +49,7 @@ panic = "abort"
 strip = true
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.62", features = ["Win32_System_Performance", "Win32_Foundation"] }
+windows = { version = "0.62", features = ["Win32_System_Performance", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }

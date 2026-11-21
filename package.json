@@ -1,7 +1,7 @@
 {
   "name": "imcl",
-  "version": "0.1.0",
-  "description": "",
+  "version": "1.5.0",
+  "description": "IMCL - a lightweight Minecraft: Java Edition launcher",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

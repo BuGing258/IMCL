@@ -1,38 +1,27 @@
 <script lang="ts">
+  import { smooth } from "$lib/motion";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { ChevronLeft, Minus, Square, Copy, X } from "@lucide/svelte";
+  import { ChevronLeft, Minus, X } from "@lucide/svelte";
   import { fly } from "svelte/transition";
   import { nav, PAGE_TITLES } from "$lib/state.svelte";
 
   // 在普通浏览器里预览时没有 Tauri，窗口按钮不做任何事
   const win = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
 
-  let maximized = $state(false);
-
-  $effect(() => {
-    if (!win) return;
-    let unlisten: (() => void) | undefined;
-    win.isMaximized().then((v) => (maximized = v));
-    win
-      .onResized(async () => {
-        maximized = await win.isMaximized();
-      })
-      .then((f) => (unlisten = f));
-    return () => unlisten?.();
-  });
+  // 和 PCL 一样不能最大化（拖边框可以自由调大小），所以没有最大化按钮
 </script>
 
 <header class="tb" data-tauri-drag-region>
   <div class="left" data-tauri-drag-region>
     {#if nav.stack.length > 1}
-      <button class="back" onclick={() => nav.back()} aria-label="返回" title="返回（Esc）" transition:fly={{ x: -8, duration: 180 }}>
+      <button class="back" onclick={() => nav.back()} aria-label="返回" title="返回（Esc）" transition:fly={{ x: -8, duration: 220, easing: smooth }}>
         <ChevronLeft size={18} />
       </button>
     {/if}
     <button class="brand" onclick={() => nav.home()} title="回到首页">IMCL</button>
     {#key nav.current}
       {#if nav.current !== "home"}
-        <span class="crumb" data-tauri-drag-region in:fly={{ x: 8, duration: 220 }}>
+        <span class="crumb" data-tauri-drag-region in:fly={{ x: 8, duration: 280, easing: smooth }}>
           <span class="sep" data-tauri-drag-region>/</span>{PAGE_TITLES[nav.current]}
         </span>
       {/if}
@@ -41,9 +30,6 @@
 
   <div class="controls">
     <button class="wc" onclick={() => win?.minimize()} aria-label="最小化"><Minus size={16} /></button>
-    <button class="wc" onclick={() => win?.toggleMaximize()} aria-label={maximized ? "还原" : "最大化"}>
-      {#if maximized}<Copy size={13} />{:else}<Square size={13} />{/if}
-    </button>
     <button class="wc close" onclick={() => win?.close()} aria-label="关闭"><X size={16} /></button>
   </div>
 </header>
@@ -75,7 +61,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-2);
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s var(--ease), color 0.15s var(--ease);
   }
   .back:hover {
     background: var(--hover);
@@ -112,7 +98,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-2);
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.12s var(--ease), color 0.12s var(--ease);
   }
   .wc:hover {
     background: var(--hover);

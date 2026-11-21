@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { fade } from "svelte/transition";
-  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search } from "@lucide/svelte";
+  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search, Wrench, CircleArrowUp, LoaderCircle } from "@lucide/svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import PackCover from "$lib/components/PackCover.svelte";
   import Select from "$lib/components/Select.svelte";
   import VersionSettings from "$lib/components/VersionSettings.svelte";
   import ExportPackDialog from "$lib/components/ExportPackDialog.svelte";
-  import { library, game, nav, toast, ui, settings, gameDirs } from "$lib/state.svelte";
-  import { api, fmtRelative } from "$lib/api";
+  import ChangeLoaderDialog from "$lib/components/ChangeLoaderDialog.svelte";
+  import { library, game, nav, toast, ui, settings, gameDirs, installs, cached, remember } from "$lib/state.svelte";
+  import { api, fmtRelative, type ModUpdate } from "$lib/api";
   import { marketName, RES_LABELS, type Pack, type ResKind } from "$lib/mock";
 
   type Tab = ResKind | "settings";
@@ -16,6 +16,8 @@
   let selId = $state(library.currentId);
   /** 正在导出整合包的版本 */
   let exporting = $state<Pack | null>(null);
+  /** 正在选新加载器的版本 */
+  let changing = $state<Pack | null>(null);
   let tab = $state<Tab>("mod");
   let filesErr = $state("");
   let confirmKey = $state<string | null>(null);
@@ -46,13 +48,20 @@
   });
   const needle = $derived(q.trim().toLowerCase());
   const hitText = (...parts: (string | null | undefined)[]) => parts.some((s) => !!s && s.toLowerCase().includes(needle));
-  const shownMods = $derived(!sel ? [] : needle ? sel.mods.filter((m) => hitText(m.name, m.id, m.version)) : sel.mods);
+  const shownMods = $derived(!sel ? [] : needle ? sel.mods.filter((m) => hitText(m.name, m.id, m.version, sel.projects?.[`mods/${m.id}`]?.title)) : sel.mods);
   function shownRes(kind: ResKind, ids: string[]) {
     return needle ? ids.filter((id) => hitText(resName(kind, id), id)) : ids;
   }
 
   const listKey = (k: ResKind) => (k === "shader" ? "shaders" : "resourcepacks") as "shaders" | "resourcepacks";
   const dirName = (k: ResKind) => (k === "mod" ? "mods" : k === "shader" ? "shaderpacks" : "resourcepacks");
+
+  // 每次打开版本管理都重新扫一遍：在文件夹里直接删掉、加进来或改过的版本马上就能看到。
+  // 已经读过的 Mod / 光影 / 材质包也作废：当前选中的版本立刻重读，其他版本等选中时再读
+  library.refresh().then(() => {
+    for (const p of library.packs) if (p.real && p !== sel) p.filesLoaded = false;
+    if (sel?.real && sel.filesLoaded) library.loadFiles(sel, true).catch((e) => (filesErr = String(e)));
+  });
 
   // 选中真实版本时读取它文件夹里的内容
   $effect(() => {
@@ -103,6 +112,104 @@
     } catch (e) {
       filesErr = String(e);
     }
+  }
+
+  /* ---------- 更换加载器的进度 ---------- */
+  const loaderTask = $derived(sel ? Object.values(installs.tasks).find((t) => t.loaderFor === sel.name) : undefined);
+  const loaderPct = $derived(
+    loaderTask ? Math.min(99, Math.floor(((Math.max(1, loaderTask.stageIndex) - 1 + (loaderTask.total ? loaderTask.done / loaderTask.total : 0)) / Math.max(1, loaderTask.stageCount)) * 100)) : 0,
+  );
+
+  /* ---------- Mod 更新 ---------- */
+  let updates = $state<Record<string, ModUpdate>>({});
+  let picked = $state<Record<string, boolean>>({});
+  let checking = $state(false);
+  let checked = $state(false);
+  let updating = $state<{ done: number; total: number } | null>(null);
+  // 换版本时清空
+  $effect(() => {
+    void sel?.id;
+    updates = {};
+    picked = {};
+    checked = false;
+  });
+  const updList = $derived(Object.values(updates));
+  const pickedList = $derived(updList.filter((u) => picked[u.file]));
+  const allPicked = $derived(updList.length > 0 && pickedList.length === updList.length);
+  const updOf = (m: Pack["mods"][number]) => updates[`mods/${m.id}`];
+
+  const updKey = (p: Pack) => `updates:${settings.gameDir}:${p.name}`;
+
+  /** 检查 Mod 更新。auto = 打开 Mod 标签时自动检查：10 分钟内用上次的结果，没更新或失败都不弹提示 */
+  async function checkUpdates(auto = false) {
+    if (!sel || checking) return;
+    const p = sel;
+    checking = true;
+    try {
+      const hit = auto ? cached<ModUpdate[]>(updKey(p), 10 * 60_000) : undefined;
+      const list = hit ?? (await api.resourceUpdates(settings.gameDir, p.name, "mod", p.mc, p.loader === "原版" ? null : p.loader));
+      remember(updKey(p), list);
+      if (sel?.id !== p.id) return;
+      updates = Object.fromEntries(list.map((u) => [u.file, u]));
+      // 默认全选，用户可以取消不想更新的
+      picked = Object.fromEntries(list.map((u) => [u.file, true]));
+      if (!list.length && !auto) toast.show("所有 Mod 都是最新的");
+    } catch (e) {
+      if (!auto) toast.show(`检查更新失败：${e}`);
+    } finally {
+      // 自动检查失败也算查过，不会一直重试
+      if (sel?.id === p.id) checked = true;
+      checking = false;
+    }
+  }
+
+  // 打开（或切到）Mod 标签时自动检查一次；Mod 列表读出来之后再查
+  $effect(() => {
+    if (tab !== "mod" || !sel || sel.loader === "原版" || !sel.mods.length || checked || checking || updating) return;
+    if (sel.real && !sel.filesLoaded) return;
+    checkUpdates(true);
+  });
+
+  function toggleAll() {
+    const v = !allPicked;
+    picked = Object.fromEntries(updList.map((u) => [u.file, v]));
+  }
+
+  async function updateSelected() {
+    if (!sel || updating || !pickedList.length) return;
+    const p = sel;
+    const todo = [...pickedList];
+    updating = { done: 0, total: todo.length };
+    const failed: string[] = [];
+    for (const u of todo) {
+      try {
+        await api.installResource({
+          gameDir: settings.gameDir,
+          version: p.name,
+          kind: "mod",
+          projectId: u.projectId,
+          mc: p.mc,
+          loader: p.loader,
+          versionId: u.versionId,
+          reinstall: true,
+          withDeps: true,
+        });
+        delete updates[u.file];
+        delete picked[u.file];
+        if (!p.real) {
+          const m = p.mods.find((x) => `mods/${x.id}` === u.file);
+          if (m) m.version = u.versionNumber;
+        }
+      } catch {
+        failed.push(u.title || u.file);
+      }
+      updating = { done: updating!.done + 1, total: todo.length };
+    }
+    updating = null;
+    remember(updKey(p), Object.values(updates));
+    if (p.real) await library.loadFiles(p, true).catch(() => {});
+    const ok = todo.length - failed.length;
+    toast.show(failed.length ? `更新了 ${ok} 个，${failed.join("、")} 更新失败` : `已更新 ${ok} 个 Mod`);
   }
 
   async function toggleMod(m: Pack["mods"][number]) {
@@ -192,12 +299,16 @@
             <button class="btn" onclick={() => gameDirs.add()}><FolderOpen size={14} />添加游戏文件夹</button>
           </div>
         {:else}
-          <p class="faint">正在读取已安装的版本…</p>
+          <div class="sk-detail" aria-label="正在读取已安装的版本">
+            <span class="skel" style:width="38%" style:height="22px"></span>
+            <span class="skel" style:width="62%"></span>
+            <span class="skel" style:width="100%" style:height="120px"></span>
+          </div>
         {/if}
       </div>
     {:else}
       {#key sel.id}
-        <div class="detail-inner" in:fade={{ duration: 180 }}>
+        <div class="detail-inner">
           <div class="hero">
             <PackCover pack={sel} size={128} />
             <div class="hero-text">
@@ -208,7 +319,7 @@
                 <button
                   class="btn btn-primary btn-pill"
                   onclick={launch}
-                  disabled={game.status !== "idle" && !mine}
+                  disabled={(game.status !== "idle" && !mine) || (!!loaderTask && loaderTask.status !== "error")}
                   title={game.status !== "idle" && !mine ? "已经有一个版本在运行" : undefined}
                 >
                   {#if !mine}
@@ -227,8 +338,24 @@
                   </button>
                 {/if}
                 <button class="btn btn-pill" onclick={openFolder}><FolderOpen size={14} />文件夹</button>
-                <button class="btn btn-pill" onclick={() => (exporting = sel ?? null)} title="导出成整合包，发给朋友导入"><PackageOpen size={14} />导出</button>
+                <button class="btn btn-pill" onclick={() => (exporting = sel ?? null)} title="导出整合包"><PackageOpen size={14} />导出</button>
+                <button class="btn btn-pill" onclick={() => (changing = sel ?? null)} disabled={!!loaderTask && loaderTask.status !== "error"} title="更换加载器或加载器版本">
+                  <Wrench size={14} />加载器
+                </button>
               </div>
+              {#if loaderTask}
+                <div class="lt" class:bad={loaderTask.status === "error"}>
+                  {#if loaderTask.status === "error"}
+                    <span class="lt-text" title={loaderTask.error}>更换加载器失败：{loaderTask.error}</span>
+                  {:else}
+                    <LoaderCircle size={13} class="spin" />
+                    <span class="lt-text">正在更换加载器 · {loaderTask.stage}</span>
+                    <span class="lt-bar"><i style:width="{loaderPct}%"></i></span>
+                    <span class="lt-pct">{loaderPct}%</span>
+                  {/if}
+                  <button class="btn btn-sm btn-icon" onclick={() => installs.cancel(loaderTask.id)} disabled={loaderTask.status === "cancelling"} aria-label={loaderTask.status === "error" ? "关闭" : "取消"}><X size={13} /></button>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -250,6 +377,11 @@
                     {#if q}<button class="clear" onclick={() => (q = "")} aria-label="清空搜索"><X size={12} /></button>{/if}
                   </label>
                 {/if}
+                {#if tab === "mod" && sel.loader !== "原版" && sel.mods.length}
+                  <button class="btn btn-sm" onclick={() => checkUpdates()} disabled={checking || !!updating}>
+                    {#if checking}<LoaderCircle size={14} class="spin" />检查中{:else}<CircleArrowUp size={14} />检查更新{/if}
+                  </button>
+                {/if}
                 {#if sel.real}
                   <button class="btn btn-sm btn-icon" onclick={reload} aria-label="重新读取" title="重新读取文件夹"><RefreshCw size={14} /></button>
                 {/if}
@@ -262,22 +394,48 @@
 
           {#if filesErr && tab !== "settings"}<p class="err-text">读取文件夹失败：{filesErr}</p>{/if}
           {#if sel.isolated === false && tab !== "settings"}
-            <p class="shared-note">没开版本隔离：这里显示的是游戏目录里共用的{tab === "mod" ? " Mod" : RES_LABELS[tab]}，可以在“设置”里打开隔离</p>
+            <p class="shared-note">和其他版本共用（没开版本隔离）</p>
           {/if}
 
           {#if tab === "settings"}
             <VersionSettings pack={sel} />
           {:else if tab === "mod"}
+            {#if updList.length}
+              <div class="upd-bar">
+                <CircleArrowUp size={15} />
+                <span><b>{updList.length}</b> 个 Mod 有新版本</span>
+                <span class="sp"></span>
+                {#if updating}
+                  <span class="faint"><LoaderCircle size={13} class="spin" />正在更新 {updating.done}/{updating.total}</span>
+                {:else}
+                  <button class="btn btn-sm btn-primary" onclick={updateSelected} disabled={!pickedList.length}>更新所选（{pickedList.length}）</button>
+                {/if}
+              </div>
+            {/if}
             {#if sel.mods.length}
               <div class="table">
                 <div class="tr th">
-                  <span>#</span><span>Mod</span><span>版本</span><span>大小</span><span class="r">启用 {enabled}/{sel.mods.length}</span>
+                  {#if updList.length}
+                    <input type="checkbox" class="ck" checked={allPicked} indeterminate={pickedList.length > 0 && !allPicked} onchange={toggleAll} disabled={!!updating} aria-label="全选有更新的 Mod" title="全选" />
+                  {:else}
+                    <span>#</span>
+                  {/if}
+                  <span>Mod</span><span>版本</span><span>大小</span><span class="r">启用 {enabled}/{sel.mods.length}</span>
                 </div>
                 {#each shownMods as m, k (m.id)}
-                  <div class="tr" class:off={!m.enabled}>
-                    <span class="faint">{k + 1}</span>
+                  {@const up = updOf(m)}
+                  <div class="tr" class:off={!m.enabled} class:has-up={!!up}>
+                    {#if up}
+                      <input type="checkbox" class="ck" bind:checked={picked[up.file]} disabled={!!updating} aria-label="更新 {m.name}" />
+                    {:else}
+                      <span class="faint">{k + 1}</span>
+                    {/if}
                     <span class="name" title={m.id}>{m.name}</span>
-                    <span class="muted mono">{m.version || "—"}</span>
+                    {#if up}
+                      <span class="ver-up mono" title="{up.current} → {up.versionNumber}"><span class="muted">{m.version || up.current}</span><span class="arrow">→</span><b>{up.versionNumber}</b></span>
+                    {:else}
+                      <span class="muted mono">{m.version || "—"}</span>
+                    {/if}
                     <span class="muted">{m.size}</span>
                     <span class="r">
                       <button
@@ -344,13 +502,19 @@
 </div>
 
 
+{#if changing}
+  <ChangeLoaderDialog pack={changing} onclose={() => (changing = null)} />
+{/if}
+
 {#if exporting}
   <ExportPackDialog pack={exporting} onclose={() => (exporting = null)} />
 {/if}
 
 <style>
   .empty-page {
-    height: 100%;
+    max-width: 460px;
+    margin: 72px auto 24px;
+    padding: 32px 28px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -358,7 +522,10 @@
     gap: 10px;
     color: var(--text-3);
     text-align: center;
-    animation: rise 0.45s var(--ease) backwards;
+    background: var(--surface);
+    backdrop-filter: var(--card-filter);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
   }
   .empty-page h2 {
     color: var(--text);
@@ -378,9 +545,14 @@
     display: grid;
     grid-template-columns: 236px minmax(0, 1fr);
   }
+  /* 文字都放在卡片材质上：设了自定义背景图时也看得清 */
   .list {
-    border-right: 1px solid var(--border);
-    padding: 8px 12px 16px;
+    margin: 12px 0 12px 12px;
+    padding: 6px 10px 12px;
+    background: var(--surface);
+    backdrop-filter: var(--card-filter);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -418,9 +590,7 @@
     gap: 10px;
     padding: 8px;
     border-radius: var(--r);
-    transition: background 0.15s;
-    animation: rise 0.45s var(--ease) backwards;
-    animation-delay: calc(min(var(--i), 10) * 40ms + 60ms);
+    transition: background 0.15s var(--ease);
   }
   .item:hover {
     background: var(--hover);
@@ -467,7 +637,12 @@
     display: flex;
     align-items: flex-end;
     gap: 22px;
-    margin-bottom: 20px;
+    margin-bottom: 14px;
+    padding: 16px;
+    background: var(--surface);
+    backdrop-filter: var(--card-filter);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
   }
   .hero-text {
     min-width: 0;
@@ -493,15 +668,100 @@
     margin-top: 14px;
     flex-wrap: wrap;
   }
+  .lt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    max-width: 460px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .lt.bad {
+    color: var(--red);
+  }
+  .lt-text {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .lt-bar {
+    flex: 1;
+    min-width: 60px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--active);
+    overflow: hidden;
+  }
+  .lt-bar i {
+    display: block;
+    height: 100%;
+    background: var(--red);
+    transition: width 0.35s var(--ease);
+  }
+  .lt-pct {
+    font-variant-numeric: tabular-nums;
+    min-width: 30px;
+    text-align: right;
+  }
+  .upd-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 8px 12px;
+    margin-bottom: 8px;
+    border-radius: var(--r);
+    background: linear-gradient(var(--red-soft), var(--red-soft)), var(--surface);
+    backdrop-filter: var(--card-filter);
+    color: var(--red);
+    font-size: 12.5px;
+  }
+  .upd-bar > span:not(.sp) {
+    color: var(--text);
+  }
+  .upd-bar .faint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-2);
+  }
+  .upd-bar .sp {
+    flex: 1;
+  }
+  .ver-up {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .ver-up .arrow {
+    color: var(--text-3);
+  }
+  .ver-up b {
+    color: var(--red);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   .tabs-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    /* 窗口窄的时候右边的按钮换到下一行，不会被挤出去 */
+    flex-wrap: wrap;
+    gap: 10px 12px;
     margin-bottom: 10px;
   }
+  /* 右边这组按钮按 0 宽度参与换行判断、再占满剩下的空间：搜索框先缩短，
+     窗口最小时也和标签放在同一行；真放不下（比最小窗口还窄）才换行 */
   .tabs-actions {
+    margin-left: auto;
+    flex: 1 1 0;
+    justify-content: flex-end;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -511,6 +771,8 @@
     display: flex;
     align-items: center;
     color: var(--text-3);
+    flex: 0 1 200px;
+    min-width: 110px;
   }
   .find > :global(svg) {
     position: absolute;
@@ -518,7 +780,7 @@
     pointer-events: none;
   }
   .find .input {
-    width: 170px;
+    width: 100%;
     height: 30px;
     padding-left: 30px;
     padding-right: 24px;
@@ -544,6 +806,12 @@
     font-size: 13px;
     color: var(--text-3);
   }
+  /* 标签切换的底板也用卡片材质；选中的那一格比底板亮一点，和别处的分段按钮一样 */
+  .tabs-row .seg {
+    background: linear-gradient(var(--hover), var(--hover)), var(--surface);
+    backdrop-filter: var(--card-filter);
+    border: 1px solid var(--border);
+  }
   .seg :global(.tab-ic) {
     vertical-align: -2px;
     margin-right: 3px;
@@ -560,7 +828,8 @@
   .shared-note {
     font-size: 12px;
     color: var(--amber);
-    background: var(--amber-soft);
+    background: linear-gradient(var(--amber-soft), var(--amber-soft)), var(--surface);
+    backdrop-filter: var(--card-filter);
     border-radius: var(--r);
     padding: 7px 12px;
     margin-bottom: 10px;
@@ -574,17 +843,22 @@
   .table {
     display: flex;
     flex-direction: column;
+    padding: 4px 6px 6px;
+    background: var(--surface);
+    backdrop-filter: var(--card-filter);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
   }
   .tr {
     display: grid;
-    grid-template-columns: 32px minmax(0, 1fr) 100px 80px 80px;
+    grid-template-columns: 32px minmax(0, 1fr) minmax(100px, auto) 80px 80px;
     align-items: center;
     gap: 8px;
     padding: 0 10px;
     height: 40px;
     border-radius: var(--r);
     font-size: 13px;
-    transition: background 0.15s, opacity 0.2s;
+    transition: background 0.15s var(--ease), opacity 0.2s var(--ease);
   }
   .tr:not(.th):hover {
     background: var(--hover);
@@ -630,6 +904,7 @@
     padding: 8px 10px;
     border-radius: var(--r);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     font-size: 13px;
   }
@@ -654,9 +929,20 @@
     flex-direction: column;
     align-items: center;
     gap: 10px;
-    padding: 40px 0;
+    padding: 40px 16px;
+    background: var(--surface);
+    backdrop-filter: var(--card-filter);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
     color: var(--text-3);
     font-size: 13px;
     text-align: center;
+  }
+  .sk-detail {
+    width: 100%;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 </style>

@@ -48,8 +48,16 @@ export interface InstalledVersion {
 }
 
 /** 版本独立设置；字段为空 = 跟随全局 */
+/** 内存分配：总内存、手动上限、自动会给多少（MB） */
+export interface MemoryPlan {
+  totalMb: number;
+  maxMb: number;
+  autoMb: number;
+}
+
 export interface VersionSettings {
   java?: string | null;
+  /** 0 表示自动分配 */
   memory?: number | null;
   account?: string | null;
   windowMode?: string | null;
@@ -70,6 +78,8 @@ export interface LaunchRequest {
   threads: number;
   /** 微软账户 id；离线账户不填 */
   msAccount?: string | null;
+  /** 离线账户的皮肤（PNG data URL），游戏里也显示 */
+  offlineSkin?: { png: string; slim: boolean } | null;
 }
 
 /** 游戏进程结束 */
@@ -205,6 +215,29 @@ export interface ModpackRequest {
   file?: string | null;
   source: Source;
   threads: number;
+}
+
+/** 给已有版本换加载器 */
+export interface ChangeLoaderRequest {
+  taskId: string;
+  gameDir: string;
+  name: string;
+  /** null = 改回原版 */
+  loader: { kind: LoaderKind; id: string } | null;
+  source: Source;
+  threads: number;
+}
+
+/** 一个有新版本的 Mod / 光影 / 材质包 */
+export interface ModUpdate {
+  /** "mods/文件名" */
+  file: string;
+  projectId: string;
+  title: string;
+  icon: string | null;
+  current: string;
+  versionId: string;
+  versionNumber: string;
 }
 
 /** 本地整合包里写的信息 */
@@ -349,6 +382,17 @@ export const api = {
 
   install: (req: InstallRequest): Promise<void> => invoke("install_version", { req }),
   installModpack: (req: ModpackRequest): Promise<void> => invoke("install_modpack", { req }),
+  changeLoader: (req: ChangeLoaderRequest): Promise<void> => invoke("change_loader", { req }),
+  /** 检查某类资源的更新（禁用的 Mod 不检查） */
+  resourceUpdates: async (gameDir: string, name: string, kind: ResKindApi, mc: string, loader: string | null): Promise<ModUpdate[]> => {
+    if (isTauri()) return invoke("modrinth_updates", { gameDir, name, kind, mc, loader });
+    await sleep(600);
+    return [
+      { file: "mods/sodium", projectId: "AANobbMI", title: "Sodium", icon: null, current: "0.5.8", versionId: "s-new", versionNumber: "0.5.13" },
+      { file: "mods/lithium", projectId: "gvQqBUqZ", title: "Lithium", icon: null, current: "0.11.2", versionId: "l-new", versionNumber: "0.11.3" },
+      { file: "mods/jade", projectId: "nvQzSEkH", title: "Jade", icon: null, current: "11.8.0", versionId: "j-new", versionNumber: "11.13.1" },
+    ];
+  },
   readModpack: async (path: string): Promise<PackInfo> => {
     if (isTauri()) return invoke("read_modpack", { path });
     await sleep(200);
@@ -375,6 +419,8 @@ export const api = {
   cancel: (taskId: string): Promise<void> => invoke("cancel_install", { taskId }),
 
   listInstalled: (gameDir: string): Promise<InstalledVersion[]> => invoke("list_installed", { gameDir }),
+  /** 把整个版本文件夹移到回收站 */
+  deleteVersion: (gameDir: string, name: string): Promise<void> => invoke("delete_version", { gameDir, name }),
   versionFiles: (gameDir: string, name: string): Promise<VersionFiles> => invoke("version_files", { gameDir, name }),
   setModEnabled: (gameDir: string, name: string, file: string, enabled: boolean): Promise<string> =>
     invoke("set_mod_enabled", { gameDir, name, file, enabled }),
@@ -490,6 +536,20 @@ export const api = {
     const r = await save({ title: "导出整合包", defaultPath: `${defaultName}.mrpack`, filters: [{ name: "Modrinth 整合包", extensions: ["mrpack"] }] });
     return r ?? null;
   },
+  pickImage: async (): Promise<string | null> => {
+    if (!isTauri()) return null;
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const r = await open({ title: "选择背景图片", filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }] });
+    return typeof r === "string" ? r : null;
+  },
+  /** 把图片复制到应用数据目录当背景，返回 data URL */
+  setBackgroundImage: (path: string): Promise<string> => invoke("set_background_image", { path }),
+  backgroundImage: (): Promise<string | null> => invoke("background_image"),
+  isWin11: (): Promise<boolean> => invoke("is_win11"),
+  memoryPlan: (gameDir: string, version: string | null): Promise<MemoryPlan> =>
+    isTauri()
+      ? invoke("memory_plan", { gameDir, version })
+      : Promise.resolve({ totalMb: 16384, maxMb: 14336, autoMb: version ? 4096 : 2048 }),
   pickJava: async (): Promise<string | null> => {
     if (!isTauri()) return null;
     const { open } = await import("@tauri-apps/plugin-dialog");

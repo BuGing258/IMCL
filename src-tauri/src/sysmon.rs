@@ -1,8 +1,27 @@
 //! 系统状态采样：每秒读取一次 CPU、内存、GPU 占用，通过 `system-stats` 事件推送给前端。
+//! 只在有页面要看（首页开着）、并且窗口没最小化时才采样；GPU 计数器比较费资源，玩游戏时尤其不该一直读。
 
 use serde::Serialize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{thread, time::Duration};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+
+/// 现在有几个页面在看系统状态
+static WATCHERS: AtomicUsize = AtomicUsize::new(0);
+
+/// 前端页面打开 / 关闭时调用
+pub fn watch(on: bool) {
+    if on {
+        WATCHERS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        let _ = WATCHERS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+    }
+}
+
+fn wanted(app: &AppHandle) -> bool {
+    WATCHERS.load(Ordering::Relaxed) > 0
+        && !app.get_webview_window("main").and_then(|w| w.is_minimized().ok()).unwrap_or(false)
+}
 
 const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 /// GPU 计数器每隔多少次采样重建一次，确保新启动的进程（比如游戏本身）能被统计到
@@ -28,11 +47,25 @@ pub fn spawn(app: AppHandle) {
                 return;
             };
             sys.refresh_cpu_usage(); // CPU 占用需要两次采样之间的差值，先预热一次
-            let mut gpu = gpu::GpuSampler::new();
+            let mut gpu = None;
             let mut ticks: u32 = 0;
+            let mut idle = true;
 
             loop {
                 thread::sleep(Duration::from_secs(1));
+                if !wanted(&app) {
+                    // 没人看：什么都不读，GPU 计数器也关掉
+                    idle = true;
+                    gpu = None;
+                    continue;
+                }
+                if idle {
+                    // 刚恢复：先预热一次，下一秒的读数才准
+                    idle = false;
+                    sys.refresh_cpu_usage();
+                    gpu = gpu::GpuSampler::new();
+                    continue;
+                }
                 sys.refresh_cpu_usage();
                 sys.refresh_memory();
 

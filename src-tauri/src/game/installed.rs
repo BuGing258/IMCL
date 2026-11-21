@@ -293,6 +293,16 @@ pub fn trash_file(game_dir: &Path, version: &str, kind: &str, file: &str) -> Res
     trash::delete(&path).with_context(|| format!("无法移到回收站：{file}"))
 }
 
+/// 删除版本：把整个版本文件夹移到回收站（误删可以从回收站还原）。
+/// 开着版本隔离时，这个版本自己的 Mod、存档、配置都在里面，会一起移走；没开隔离时共用的文件不受影响
+pub fn delete_version(game_dir: &Path, version: &str) -> Result<()> {
+    let dir = version_dir(game_dir, version)?;
+    if !dir.is_dir() {
+        bail!("版本文件夹不存在：{version}");
+    }
+    trash::delete(&dir).with_context(|| format!("无法移到回收站：{version}（可能有文件正被占用，比如游戏还开着）"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

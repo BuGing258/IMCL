@@ -1,7 +1,7 @@
 <script lang="ts">
   // 把一个版本导出成 Modrinth 整合包（.mrpack），发给朋友导入就能玩一样的 Mod
-  import { fade, scale } from "svelte/transition";
-  import { X, LoaderCircle, PackageOpen, FolderOpen, Info, TriangleAlert, Check, Folder, FileText } from "@lucide/svelte";
+  import Modal from "./Modal.svelte";
+  import { X, LoaderCircle, PackageOpen, FolderOpen, TriangleAlert, Check, Folder, FileText } from "@lucide/svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api, fmtBytes, type ExportEntry, type ExportResult } from "$lib/api";
   import { settings, toast, isTauri } from "$lib/state.svelte";
@@ -98,27 +98,9 @@
     }
   }
 
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape" && !busy) {
-      e.stopPropagation();
-      onclose();
-    }
-  }
 </script>
 
-<svelte:window onkeydowncapture={onKey} />
-
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="mask" transition:fade={{ duration: 150 }} onclick={() => !busy && onclose()}>
-  <div
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="ex-title"
-    tabindex="-1"
-    transition:scale={{ start: 0.96, duration: 180 }}
-    onclick={(e) => e.stopPropagation()}
-  >
+<Modal {onclose} width={560} labelledby="ex-title" closable={!busy}>
     <header>
       <span class="ic"><PackageOpen size={18} /></span>
       <div class="ht">
@@ -132,12 +114,12 @@
       <div class="done">
         <span class="ok"><Check size={22} /></span>
         <b>导出好了</b>
-        <p class="faint">{fmtBytes(result.size)} · {result.linked} 个文件写成了 Modrinth 下载地址，{result.bundled} 个直接打包在里面</p>
+        <p class="faint">{fmtBytes(result.size)}</p>
         <p class="path" title={result.path}>{result.path}</p>
         {#each result.warnings as w}
           <p class="warn"><TriangleAlert size={13} />{w}</p>
         {/each}
-        <p class="faint tip">发给朋友后，在 IMCL 的 Mod 页「整合包」里点「从文件导入」就行，PCL、HMCL、Prism 也能导入。</p>
+        <p class="faint tip">朋友在 Mod 页「整合包」里点「从文件导入」就能装</p>
       </div>
       <footer>
         <span class="sp"></span>
@@ -156,7 +138,7 @@
         </label>
         <label class="f full">
           <span>简介</span>
-          <input class="input" bind:value={summary} maxlength="200" placeholder="可以不填，比如：我们服务器用的 Mod" />
+          <input class="input" bind:value={summary} maxlength="200" placeholder="可以不填" />
         </label>
       </div>
 
@@ -192,7 +174,6 @@
         {#if pack.optifine}<p class="warn"><TriangleAlert size={13} />OptiFine 不能放进整合包，朋友那边需要自己装</p>{/if}
       </section>
 
-      <p class="faint note"><Info size={12} />Modrinth 上有的 Mod、光影、材质包只记下载地址，整合包会很小；其余文件直接打包进去。</p>
       {#if err}<p class="err-text">{err}</p>{/if}
 
       <footer>
@@ -203,33 +184,9 @@
         </button>
       </footer>
     {/if}
-  </div>
-</div>
+  </Modal>
 
 <style>
-  .mask {
-    position: fixed;
-    inset: 0;
-    z-index: 1500;
-    background: rgba(0, 0, 0, 0.35);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .dialog {
-    width: min(560px, 100%);
-    max-height: 100%;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px 18px;
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
-  }
   header {
     display: flex;
     align-items: center;
@@ -321,9 +278,6 @@
   li label:hover {
     background: var(--hover);
   }
-  li input {
-    accent-color: var(--red);
-  }
   .ei {
     color: var(--text-3);
     display: grid;
@@ -368,12 +322,6 @@
     gap: 6px;
     font-size: 12px;
     color: var(--amber);
-  }
-  .note {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11.5px;
   }
   .done {
     display: flex;

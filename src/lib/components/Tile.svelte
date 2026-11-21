@@ -46,11 +46,10 @@
     padding: 14px 16px;
     border-radius: var(--r-lg);
     background: var(--surface);
+    backdrop-filter: var(--card-filter);
     border: 1px solid var(--border);
     text-align: left;
-    transition: transform 0.25s var(--ease), border-color 0.2s, box-shadow 0.25s;
-    animation: rise 0.5s var(--ease) backwards;
-    animation-delay: calc(var(--i) * 45ms + 80ms);
+    transition: transform 0.25s var(--ease), border-color 0.2s var(--ease), box-shadow 0.25s var(--ease);
   }
   .tile:not(.static):hover {
     transform: translateY(-3px);
@@ -63,7 +62,7 @@
   .ic {
     color: var(--text-2);
     display: flex;
-    transition: color 0.2s;
+    transition: color 0.2s var(--ease);
     position: relative;
   }
   .tile:not(.static):hover .ic {
@@ -75,7 +74,7 @@
     bottom: -22px;
     color: var(--wm);
     transform: rotate(-10deg);
-    transition: transform 0.5s var(--ease), color 0.3s;
+    transition: transform 0.5s var(--ease), color 0.3s var(--ease);
     pointer-events: none;
     display: flex;
   }
