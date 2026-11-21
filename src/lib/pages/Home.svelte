@@ -71,9 +71,15 @@
   );
   const level = (p: number) => (p >= 85 ? "hi" : p >= 60 ? "mid" : "lo");
 
+  // 首页常驻（见 +page.svelte）：被别的页面盖住时停掉系统状态采样，收起版本菜单
+  const shown = $derived(nav.current === "home");
   $effect(() => {
+    if (!shown) return;
     sysmon.start();
     return () => sysmon.stop();
+  });
+  $effect(() => {
+    if (!shown) pickerOpen = false;
   });
 
   async function openPicker() {
@@ -125,7 +131,7 @@
 
   function onKey(e: KeyboardEvent) {
     // 只在没有聚焦任何控件时响应 Enter，避免和按钮自身的回车冲突
-    if (e.key === "Enter" && e.target === document.body && !pickerOpen && pack) {
+    if (shown && e.key === "Enter" && e.target === document.body && !pickerOpen && pack) {
       e.preventDefault();
       game.toggle();
     }

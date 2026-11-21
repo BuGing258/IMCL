@@ -2,7 +2,7 @@
   import { smooth } from "$lib/motion";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { ChevronLeft, Minus, X } from "@lucide/svelte";
-  import { fly } from "svelte/transition";
+  import { fade, fly } from "svelte/transition";
   import { nav, PAGE_TITLES } from "$lib/state.svelte";
 
   // 在普通浏览器里预览时没有 Tauri，窗口按钮不做任何事
@@ -13,19 +13,22 @@
 
 <header class="tb" data-tauri-drag-region>
   <div class="left" data-tauri-drag-region>
-    {#if nav.stack.length > 1}
-      <button class="back" onclick={() => nav.back()} aria-label="返回" title="返回（Esc）" transition:fly={{ x: -8, duration: 220, easing: smooth }}>
-        <ChevronLeft size={18} />
-      </button>
-    {/if}
-    <button class="brand" onclick={() => nav.home()} title="回到首页">IMCL</button>
+    <!-- 返回按钮不占排版位置：整排（返回、IMCL、标题）一起平移让出/收回它的位置，图标不会在按钮消失时瞬移 -->
+    <div class="track" class:shift={nav.stack.length > 1} data-tauri-drag-region>
+      {#if nav.stack.length > 1}
+        <button class="back" onclick={() => nav.back()} aria-label="返回" title="返回（Esc）" transition:fade={{ duration: 180 }}>
+          <ChevronLeft size={18} />
+        </button>
+      {/if}
+      <button class="brand" onclick={() => nav.home()} title="回到首页">IMCL</button>
     {#key nav.current}
       {#if nav.current !== "home"}
         <span class="crumb" data-tauri-drag-region in:fly={{ x: 8, duration: 280, easing: smooth }}>
           <span class="sep" data-tauri-drag-region>/</span>{PAGE_TITLES[nav.current]}
         </span>
-      {/if}
-    {/key}
+        {/if}
+      {/key}
+    </div>
   </div>
 
   <div class="controls">
@@ -53,7 +56,25 @@
     flex: 1;
     min-width: 0;
   }
+  .track {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 100%;
+    min-width: 0;
+    /* 左边留出返回按钮（28px + 间距 4px）的位置，没有返回按钮时整排左移把它藏起来 */
+    padding-left: 32px;
+    transform: translateX(-32px);
+    transition: transform 0.26s var(--ease);
+  }
+  .track.shift {
+    transform: none;
+  }
   .back {
+    position: absolute;
+    left: 0;
+    top: 6px;
     width: 28px;
     height: 28px;
     border-radius: var(--r-sm);

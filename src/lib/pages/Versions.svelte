@@ -58,7 +58,8 @@
 
   // 每次打开版本管理都重新扫一遍：在文件夹里直接删掉、加进来或改过的版本马上就能看到。
   // 已经读过的 Mod / 光影 / 材质包也作废：当前选中的版本立刻重读，其他版本等选中时再读
-  library.refresh().then(() => {
+  // 等页面滑完再扫：扫描结果要重新排版整页，放在滑动途中会卡一下
+  nav.settled().then(() => library.refresh()).then(() => {
     for (const p of library.packs) if (p.real && p !== sel) p.filesLoaded = false;
     if (sel?.real && sel.filesLoaded) library.loadFiles(sel, true).catch((e) => (filesErr = String(e)));
   });
@@ -68,7 +69,7 @@
     const p = sel;
     if (!p?.real || p.filesLoaded) return;
     filesErr = "";
-    library.loadFiles(p).catch((e) => (filesErr = String(e)));
+    nav.settled().then(() => library.loadFiles(p)).catch((e) => (filesErr = String(e)));
   });
 
   function meta(p: Pack) {

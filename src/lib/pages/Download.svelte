@@ -3,7 +3,7 @@
   import { slide } from "svelte/transition";
   import { Box, FlaskConical, Search, Download as DownloadIcon, Check, X, LoaderCircle, RefreshCw, Info, History } from "@lucide/svelte";
   import Select from "$lib/components/Select.svelte";
-  import { library, settings, installs, javas, cached, remember } from "$lib/state.svelte";
+  import { library, settings, installs, javas, cached, remember, nav } from "$lib/state.svelte";
   import {
     api,
     checkVersionName,
@@ -37,8 +37,11 @@
     loading = true;
     loadErr = "";
     try {
-      versions = await api.manifest(settings.source);
-      remember(key, versions);
+      const list = await api.manifest(settings.source);
+      remember(key, list);
+      // 列表有一百多行，等页面滑完再渲染，不然滑动会卡一下
+      await nav.settled();
+      versions = list;
     } catch (e) {
       loadErr = String(e);
     } finally {

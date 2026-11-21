@@ -15,7 +15,7 @@
   import Mods from "$lib/pages/Mods.svelte";
   import Accounts from "$lib/pages/Accounts.svelte";
   import Settings from "$lib/pages/Settings.svelte";
-  import { nav, settings, accounts, library, saveSettings, initBackend, appearance, isTauri, type PageId } from "$lib/state.svelte";
+  import { nav, settings, accounts, library, saveSettings, initBackend, appearance, isTauri, PAGE_SLIDE_MS, type PageId } from "$lib/state.svelte";
 
   // 取默认游戏目录、扫描已安装的版本
   initBackend();
@@ -195,16 +195,42 @@
    * （分开写的话是两个互不相干的动画，打断后进场动画还在跑，和离场动画每帧抢着设位置，页面会跳）
    */
   const PARALLAX = 0.28;
-  const DURATION = 460;
+  const DURATION = PAGE_SLIDE_MS;
   let stageEl = $state<HTMLElement>();
+  /** 首页常驻在最底层（见下面的模板） */
+  let homeEl = $state<HTMLElement>();
+  /** 舞台宽度：用 ResizeObserver 记下来，动画每一帧直接用，不去读 clientWidth（读一次就要强制排版一次） */
+  let stageW = 0;
+  $effect(() => {
+    const el = stageEl;
+    if (!el) return;
+    stageW = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      stageW = el.clientWidth;
+      clipPages();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
   /** 正在动的页面此刻的水平位置（px）；不在里面的就是 0 */
   const pageX = new Map<HTMLElement, number>();
 
-  /** 每一页裁到压在它上面的页面的左边沿；上面没有页面的不裁 */
+  /**
+   * 每一页裁到压在它上面的页面的左边沿；上面没有页面的不裁。
+   * 首页不参与进出场动画，它的位置跟着上面的页面算：上面的页面滑进来时首页往左挪 28%，滑走时挪回来
+   */
   function clipPages() {
     if (!stageEl) return;
-    const w = stageEl.clientWidth;
+    const w = stageW || stageEl.clientWidth;
     const pages = [...stageEl.querySelectorAll<HTMLElement>(":scope > .page")];
+    if (homeEl) {
+      const others = pages.filter((p) => p !== homeEl);
+      const minX = others.length ? Math.min(...others.map((p) => pageX.get(p) ?? 0)) : w;
+      const hx = Math.max(-PARALLAX * w, Math.min(0, -PARALLAX * (w - minX)));
+      if (hx === 0) pageX.delete(homeEl);
+      else pageX.set(homeEl, hx);
+      homeEl.style.transform = hx === 0 ? "" : `translateX(${hx}px)`;
+    }
     for (const p of pages) {
       const z = Number(p.style.zIndex) || 0;
       const x = pageX.get(p) ?? 0;
@@ -236,7 +262,7 @@
    * 判断是进场还是离场
    */
   function page(node: HTMLElement, forward: boolean) {
-    const w = stageEl?.clientWidth ?? node.offsetWidth;
+    const w = stageW || stageEl?.clientWidth || node.offsetWidth;
     // 还没记录的就是刚创建、正要进场的页面（Svelte 不保证 use: 和 transition: 谁先跑）
     if (!pageOf.has(node)) pageOf.set(node, nav.current);
     const entering = pageOf.get(node) === nav.current;
@@ -286,18 +312,26 @@
 <div class="app">
   <TitleBar />
   <main class="stage" bind:this={stageEl}>
+    <!-- 首页常驻在最底层：离开时不销毁，返回时不用重建（重建一次要重新算一千多个元素的样式，返回时会卡一下）。
+         被盖住时不能点、不能聚焦；位置由 clipPages 跟着上面的页面算 -->
+    <div class="page home-layer" bind:this={homeEl} inert={nav.current !== "home"}>
+      <div class="page-body"><Home /></div>
+    </div>
     {#key nav.current}
-      {@const Page = PAGES[nav.current]}
-      <div
-        class="page"
-        use:freezeZ={nav.stack.length}
-        use:trackPage={nav.current}
-        transition:page={nav.dir > 0}
-        onoutrostart={(e) => (e.currentTarget.style.pointerEvents = "none")}
-        onintrostart={(e) => (e.currentTarget.style.pointerEvents = "")}
-      >
-        <div class="page-body"><Page /></div>
-      </div>
+      {#if nav.current !== "home"}
+        {@const Page = PAGES[nav.current]}
+        <!-- |global：动画在外面的 {#if} 切换时也要播（返回首页时这一页要滑走） -->
+        <div
+          class="page"
+          use:freezeZ={nav.stack.length}
+          use:trackPage={nav.current}
+          transition:page|global={nav.dir > 0}
+          onoutrostart={(e) => (e.currentTarget.style.pointerEvents = "none")}
+          onintrostart={(e) => (e.currentTarget.style.pointerEvents = "")}
+        >
+          <div class="page-body"><Page /></div>
+        </div>
+      {/if}
     {/key}
   </main>
   <Toast />
@@ -322,6 +356,9 @@
     isolation: isolate;
     /* 页面内容按舞台宽度排版（100cqw），切换时 .page 变窄也不会重新排版 */
     container-type: inline-size;
+  }
+  .home-layer {
+    z-index: 0;
   }
   .page {
     position: absolute;

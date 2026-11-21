@@ -19,28 +19,49 @@ export const PAGE_TITLES: Record<PageId, string> = {
   settings: "设置",
 };
 
+/** 页面切换滑动的时长（毫秒），+page.svelte 里的动画也用这个 */
+export const PAGE_SLIDE_MS = 460;
+
 class Nav {
   stack = $state<PageId[]>(["home"]);
   /** 1 = 前进（新页面从右往左滑入），-1 = 返回 */
   dir = $state<1 | -1>(1);
   current = $derived(this.stack[this.stack.length - 1]);
+  /** 最近一次切换页面的时间 */
+  #movedAt = 0;
 
   go(page: PageId) {
     if (page === this.current) return;
     this.dir = 1;
+    this.#movedAt = performance.now();
     this.stack = [...this.stack, page];
   }
 
   back() {
     if (this.stack.length <= 1) return;
     this.dir = -1;
+    this.#movedAt = performance.now();
     this.stack = this.stack.slice(0, -1);
   }
 
   home() {
     if (this.stack.length <= 1) return;
     this.dir = -1;
+    this.#movedAt = performance.now();
     this.stack = ["home"];
+  }
+
+  /**
+   * 等页面滑动结束（没在切换就马上返回）。
+   * 进页面时异步拿到的数据（版本列表、搜索结果、刷新结果）如果在滑动途中渲染，
+   * 那一下的脚本和排版会把动画卡住几十毫秒；等滑完再放上去，静止时多花这点时间看不出来
+   */
+  async settled() {
+    for (;;) {
+      const left = this.#movedAt + PAGE_SLIDE_MS + 20 - performance.now();
+      if (left <= 0) return;
+      await new Promise((r) => setTimeout(r, left));
+    }
   }
 }
 export const nav = new Nav();

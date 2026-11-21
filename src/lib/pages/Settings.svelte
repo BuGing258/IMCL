@@ -6,7 +6,7 @@
   import { appDataDir } from "@tauri-apps/api/path";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
-  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem, installs, appearance, memory, library, type InstallTask } from "$lib/state.svelte";
+  import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem, installs, appearance, memory, library, nav, type InstallTask } from "$lib/state.svelte";
 
   const isPreset = $derived(ACCENTS.some((a) => a.color.toLowerCase() === settings.accent.toLowerCase()));
   /** 当前背景材质对应的卡片材质 */
@@ -22,7 +22,7 @@
     if (plan && settings.memory > plan.maxMb) settings.memory = plan.maxMb;
   });
 
-  if (!javas.offers) javas.loadOffers();
+  if (!javas.offers) nav.settled().then(() => javas.loadOffers());
 
   let version = $state("0.1.0");
   if (isTauri()) getVersion().then((v) => (version = v)).catch(() => {});

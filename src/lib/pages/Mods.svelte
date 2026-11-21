@@ -143,7 +143,8 @@
 
   // 真实版本先读一下文件夹，才知道哪些已经装了
   $effect(() => {
-    if (pack?.real && !pack.filesLoaded) library.loadFiles(pack).catch(() => {});
+    const p = pack;
+    if (p?.real && !p.filesLoaded) nav.settled().then(() => library.loadFiles(p)).catch(() => {});
   });
 
   /* ---------- 搜索（输入停顿后再搜） ---------- */
@@ -173,6 +174,8 @@
     loadErr = "";
     try {
       const r = await api.searchResources({ ...req, offset: append ? hits.length : 0 });
+      // 刚进页面时结果可能在滑动途中回来，等滑完再渲染卡片
+      await nav.settled();
       if (my !== seq) return;
       hits = append ? [...hits, ...r.hits] : r.hits;
       total = r.total;
