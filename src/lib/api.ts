@@ -69,7 +69,7 @@ export interface OnlineModStatus {
 
 /** 联机 Mod 支持的游戏版本和加载器（和 online_mod.rs 里的 BUILDS 一致） */
 /** 内置联机 Mod 的版本（和 online_mod.rs 的 VERSION 一致） */
-export const ONLINE_MOD_VERSION = "1.3.0";
+export const ONLINE_MOD_VERSION = "1.3.5";
 export const ONLINE_MOD_BUILDS: { mc: string; loader: string; note: string }[] = [
   { mc: "1.20.1", loader: "Fabric", note: "Fabric Loader 0.14.21+ · Java 17+" },
   { mc: "1.20.1", loader: "Forge", note: "Forge 47+ · Java 17+" },

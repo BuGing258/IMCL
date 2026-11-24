@@ -435,13 +435,13 @@
     overflow-y: auto;
     padding: 5px;
     border-radius: var(--r);
-    background: var(--pop-bg);
-    backdrop-filter: var(--pop-filter);
+    /* 控件材质：和卡片一样的不透明度、模糊 */
+    background: var(--surface);
+    backdrop-filter: var(--float-filter);
     border: 1px solid var(--border-strong);
   }
-  /* 云母背景：下面已经挖空透出云母，底色和卡片一样，不再叠模糊 */
-  :global(:root[data-material="mica"]) .sheet {
-    background: var(--surface);
+  /* 背景和控件都是云母：下面已经挖空透出云母，不再叠模糊 */
+  :global(:root[data-pop="hole"]) .sheet {
     backdrop-filter: none;
   }
 

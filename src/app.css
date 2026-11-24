@@ -86,6 +86,7 @@
 :root {
   --card-a: 100%;
   --card-filter: none;
+  --float-filter: none;
   --pop-a: 100%;
   --pop-filter: none;
 
@@ -506,26 +507,28 @@ input[type="range"].locked::-webkit-slider-thumb {
   transition: width 0.35s var(--ease);
 }
 
-/* 骨架屏：加载时的灰色占位块，光带来回扫 */
+/* 骨架屏：加载时的灰色占位块，光带来回扫。
+   光带放在伪元素上只动 transform：GPU 自己就能播，不用每一帧重画
+   （以前动的是 background-position，切页面滑动时每一帧都要把十几个占位块重画一遍） */
 .skel {
   display: block;
+  position: relative;
+  overflow: hidden;
   height: 12px;
   border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    var(--hover) 0%,
-    var(--active) 45%,
-    var(--hover) 90%
-  );
-  background-size: 300% 100%;
+  background: var(--hover);
+}
+.skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--active) 50%, transparent);
+  transform: translateX(-100%);
   animation: shimmer 1.5s var(--ease-io) infinite;
 }
 @keyframes shimmer {
-  from {
-    background-position: 100% 0;
-  }
   to {
-    background-position: -50% 0;
+    transform: translateX(100%);
   }
 }
 

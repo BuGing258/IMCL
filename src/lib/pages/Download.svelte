@@ -64,6 +64,32 @@
   );
   const latest = $derived(versions.find((v) => v.type === "release")?.id);
 
+  /* 版本列表分批渲染：全部版本有上千个元素，一下子建出来要 40ms+ 脚本、20ms 排版（实测，正好卡在点进来的那一下）。
+     先只放一屏（16 行），页面滑完后趁空闲每次再加 80 行，直到放完；换筛选、搜索时从头来 */
+  const FIRST = 16; // 一屏大概放得下十来行
+  let limit = $state(FIRST);
+  const visible = $derived(list.slice(0, limit));
+  $effect(() => {
+    const all = list;
+    limit = FIRST;
+    let stop = false;
+    let h = 0;
+    const idle = (cb: () => void) => ("requestIdleCallback" in window ? requestIdleCallback(cb, { timeout: 400 }) : setTimeout(cb, 50));
+    const grow = () => {
+      if (stop || limit >= all.length) return;
+      limit += 80;
+      h = idle(grow);
+    };
+    nav.settled().then(() => {
+      if (!stop) h = idle(grow);
+    });
+    return () => {
+      stop = true;
+      if ("cancelIdleCallback" in window) cancelIdleCallback(h);
+      else clearTimeout(h);
+    };
+  });
+
   /* ---------- 展开的安装面板 ---------- */
   let expanded = $state<string | null>(null);
   let loader = $state<LoaderKind | null>(null);
@@ -220,7 +246,7 @@
       </div>
     {:else}
       <div class="list">
-        {#each list as v, idx (v.id)}
+        {#each visible as v, idx (v.id)}
           {@const owned = library.packs.filter((pk) => pk.mc === v.id).length}
           {@const task = installs.forMc(v.id)}
           <div class="row-wrap" class:open={expanded === v.id} style:--i={idx}>

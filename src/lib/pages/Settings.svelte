@@ -9,7 +9,7 @@
   import { settings, gameDirs, javas, javaOptions, toast, isTauri, fmtMem, installs, appearance, memory, library, nav, isPreload, type InstallTask } from "$lib/state.svelte";
 
   const isPreset = $derived(ACCENTS.some((a) => a.color.toLowerCase() === settings.accent.toLowerCase()));
-  /** 当前背景材质对应的卡片材质 */
+  /** 当前背景材质对应的控件材质（卡片、下拉框、菜单都用它） */
   const card = $derived(appearance.card);
 
   /* 内存分配：自动时按首页选中的版本算给多少；手动最多给到总内存减 2 GB */
@@ -242,7 +242,7 @@
         {/if}
       {/if}
       <div class="row">
-        <div class="lbl"><b>卡片材质</b></div>
+        <div class="lbl"><b>控件材质</b></div>
         <div class="ctl">
           <div class="seg">
             <button class:on={card.kind === "custom"} onclick={() => (card.kind = "custom")}>自定义</button>
@@ -254,14 +254,14 @@
         <div class="row sub">
           <div class="lbl"><b>不透明度</b></div>
           <div class="ctl">
-            <input type="range" min="0" max="100" step="5" bind:value={card.opacity} use:fill={card.opacity} aria-label="卡片不透明度" />
+            <input type="range" min="0" max="100" step="5" bind:value={card.opacity} use:fill={card.opacity} aria-label="控件不透明度" />
             <span class="val">{card.opacity}%</span>
           </div>
         </div>
         <div class="row sub">
           <div class="lbl"><b>模糊</b></div>
           <div class="ctl">
-            <input type="range" min="0" max="40" step="2" bind:value={card.blur} use:fill={card.blur} aria-label="卡片模糊" />
+            <input type="range" min="0" max="40" step="2" bind:value={card.blur} use:fill={card.blur} aria-label="控件模糊" />
             <span class="val">{card.blur}</span>
           </div>
         </div>

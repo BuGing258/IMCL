@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search, Wrench, CircleArrowUp, LoaderCircle, Trash2, Ban, CircleCheck } from "@lucide/svelte";
+  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search, Wrench, CircleArrowUp, LoaderCircle, Trash2, Ban, CircleCheck, Download, FolderInput } from "@lucide/svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { SvelteSet } from "svelte/reactivity";
   import { fly } from "svelte/transition";
@@ -9,6 +9,8 @@
   import VersionSettings from "$lib/components/VersionSettings.svelte";
   import ExportPackDialog from "$lib/components/ExportPackDialog.svelte";
   import ChangeLoaderDialog from "$lib/components/ChangeLoaderDialog.svelte";
+  import ImportPackDialog from "$lib/components/ImportPackDialog.svelte";
+  import Popover from "$lib/components/Popover.svelte";
   import { library, game, nav, toast, ui, settings, gameDirs, installs, cached, remember, isPreload } from "$lib/state.svelte";
   import { api, fmtRelative, type ModUpdate } from "$lib/api";
   import { marketName, RES_LABELS, type Pack, type ResKind } from "$lib/mock";
@@ -19,6 +21,12 @@
   let selId = $state(library.currentId);
   /** 正在导出整合包的版本 */
   let exporting = $state<Pack | null>(null);
+  /** 从文件导入整合包：选好文件后弹出导入对话框（和 Mod 页的一样），进度在标题栏的下载面板里 */
+  let importFile = $state<string | null>(null);
+  async function pickPackFile() {
+    const f = await api.pickMrpack();
+    if (f) importFile = f;
+  }
   /** 正在选新加载器的版本 */
   let changing = $state<Pack | null>(null);
   let tab = $state<Tab>("mod");
@@ -397,7 +405,22 @@
   <aside class="list">
     <div class="list-head">
       <h2>版本管理</h2>
-      <button class="btn btn-sm" onclick={() => nav.go("download")}><Plus size={14} />安装</button>
+      <!-- 安装：下载新的游戏版本，或者从文件导入整合包 -->
+      <Popover align="start" width="236px" label="安装">
+        {#snippet trigger({ open, toggle })}
+          <button class="btn btn-sm" class:on={open} onclick={toggle} aria-haspopup="menu" aria-expanded={open}><Plus size={14} />安装</button>
+        {/snippet}
+        {#snippet children({ close })}
+          <button class="menu-item" role="menuitem" onclick={() => (close(), nav.go("download"))}>
+            <span class="mi-ic"><Download size={16} /></span>
+            <span class="mi-text">安装游戏版本<small>原版 · 加载器 · OptiFine</small></span>
+          </button>
+          <button class="menu-item" role="menuitem" onclick={() => (close(), pickPackFile())}>
+            <span class="mi-ic"><FolderInput size={16} /></span>
+            <span class="mi-text">导入整合包<small>从 .mrpack 文件</small></span>
+          </button>
+        {/snippet}
+      </Popover>
     </div>
     <div class="dir">
       <Select
@@ -697,6 +720,10 @@
 
 {#if exporting}
   <ExportPackDialog pack={exporting} onclose={() => (exporting = null)} />
+{/if}
+
+{#if importFile}
+  <ImportPackDialog file={importFile} onclose={() => (importFile = null)} />
 {/if}
 
 <style>

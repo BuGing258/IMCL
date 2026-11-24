@@ -106,7 +106,8 @@
   let sort = $state<"relevance" | "downloads" | "updated">("relevance");
   let hits = $state<Hit[]>([]);
   let total = $state(0);
-  let loading = $state(false);
+  // 预渲染时把“正在加载”的占位块也画出来：第一次真正进来时 GPU 就不用现场编译它们的着色器（实测卡 40ms）
+  let loading = $state(isPreload());
   let loadErr = $state("");
   let installing = $state<Record<string, boolean>>({});
   /** 刚装上的（识别结果回来之前先当作已安装），值是版本号 */

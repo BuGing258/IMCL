@@ -132,7 +132,7 @@
     else delete root.dataset.bg;
   });
 
-  // 卡片材质：不透明度和模糊；“云母”是一组固定的值（半透明 + 大模糊 + 提一点饱和度）
+  // 控件材质（设置里以前叫“卡片材质”）：不透明度和模糊；“云母”是一组固定的值（半透明 + 大模糊 + 提一点饱和度）
   $effect(() => {
     const c = appearance.card;
     const mica = c.kind === "mica";
@@ -142,9 +142,17 @@
     const pa = Math.max(a, 82);
     const s = document.documentElement.style;
     s.setProperty("--card-a", `${a}%`);
-    s.setProperty("--card-filter", filter);
+    // 页面上的卡片：只有设了背景图片时背景模糊才有意义。没有背景图时卡片后面是透明的（云母）或纯色，
+    // 模糊了看起来一模一样，但切换页面时每一帧 GPU 都要把每张卡片后面重新模糊一遍（实测 Mod 页一帧 38ms）
+    s.setProperty("--card-filter", appearance.backgroundKind === "image" ? filter : "none");
+    // 浮在内容上面的（下拉框、菜单、下载面板）下面真有东西，按设置模糊
+    s.setProperty("--float-filter", filter);
     s.setProperty("--pop-a", `${pa}%`);
     s.setProperty("--pop-filter", pa < 100 ? "blur(30px) saturate(1.4)" : "none");
+    // 下拉框和首页版本菜单的材质（见 micaHole.ts）：
+    //   hole：背景和控件都是云母，在菜单下面挖洞透出真正的云母；
+    //   card：其他情况，菜单和卡片一样，按控件材质的不透明度、模糊来
+    document.documentElement.dataset.pop = settings.material === "mica" && mica ? "hole" : "card";
   });
 
   // 窗口的亮色 / 暗色（云母的颜色跟着它走）；只在主题变化时设置
@@ -368,8 +376,8 @@
           use:freezeZ={nav.stack.length}
           use:trackPage={nav.current}
           transition:page|global={nav.dir > 0}
-          onoutrostart={(e) => (e.currentTarget.style.pointerEvents = "none")}
-          onintrostart={(e) => (e.currentTarget.style.pointerEvents = "")}
+          onoutrostart={(e) => e.currentTarget.classList.add("leaving")}
+          onintrostart={(e) => e.currentTarget.classList.remove("leaving")}
         >
           <div class="page-body"><Page /></div>
         </div>
@@ -414,6 +422,9 @@
     inset: 0;
     /* 切换时宽度会变小（被另一页裁掉），里面的内容宽度不变 */
     overflow: hidden;
+    /* 页面和里面的内容各占一个合成层：切换时每一帧改的 transform / 宽度只是在 GPU 上挪动、裁剪现成的层，
+       不用把整页重新画一遍（以前靠卡片的背景模糊“顺便”把它们拆成了层，去掉模糊后实测 GPU 一帧 40~70ms） */
+    will-change: transform;
   }
   /* 不用 .page 这个类：切换动画按 .page 找页面算位置，预渲染的不能掺进去 */
   .preload {
@@ -425,7 +436,17 @@
     opacity: 0.01;
     pointer-events: none;
   }
+  /* 正在滑走的页面：盖一层透明的挡板，点不到里面的东西。
+     不用 pointer-events: none——它会往下继承，一加上整页上千个元素都要重算样式（实测返回时卡 10ms+）；
+     挡板只动这一个伪元素 */
+  .page:global(.leaving)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+  }
   .page-body {
+    will-change: transform;
     position: absolute;
     inset: 0 auto 0 0;
     width: 100cqw;

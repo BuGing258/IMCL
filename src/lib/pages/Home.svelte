@@ -449,16 +449,16 @@
     border-radius: var(--r-lg);
     overflow: hidden;
   }
-  /* 版本菜单和首页卡片用同一套材质（设置里的“卡片材质”） */
+  /* 版本菜单和首页卡片用同一套材质（设置里的“控件材质”）；它浮在内容上，模糊用 --float-filter */
   .sheet {
     padding: 6px;
     border-radius: var(--r-lg);
     background: var(--surface);
-    backdrop-filter: var(--card-filter);
+    backdrop-filter: var(--float-filter);
     border: 1px solid var(--border-strong);
   }
-  /* 云母背景：下面已经挖空透出云母，不再叠模糊 */
-  :global(:root[data-material="mica"]) .sheet {
+  /* 背景和控件都是云母：下面已经挖空透出云母，不再叠模糊 */
+  :global(:root[data-pop="hole"]) .sheet {
     backdrop-filter: none;
   }
   .pk-head {

@@ -131,7 +131,7 @@ export interface Settings {
   background: "none" | "image";
   /** 背景图模糊（px） */
   bgBlur: number;
-  /** 卡片材质，实色和云母背景各存一份 */
+  /** 控件材质（卡片、下拉框、菜单），实色和云母背景各存一份 */
   cards: Record<Material, CardMaterial>;
 }
 
@@ -213,7 +213,7 @@ class Appearance {
     return settings.background;
   }
 
-  /** 当前背景材质对应的卡片材质 */
+  /** 当前背景材质对应的控件材质 */
   get card(): CardMaterial {
     // 旧设置里可能还是“亚克力”，迁移之前先当实色
     return settings.cards[settings.material] ?? settings.cards.solid;
@@ -771,9 +771,41 @@ export interface InstallOptions {
   optifine: { type: string; patch: string } | null;
 }
 
+/** 任务的总进度（0~99，按阶段折算；完成前不到 100） */
+export function taskPct(t: Pick<InstallTask, "stageIndex" | "stageCount" | "done" | "total">) {
+  const part = t.total ? t.done / t.total : 0;
+  return Math.min(99, Math.floor(((Math.max(1, t.stageIndex) - 1 + part) / Math.max(1, t.stageCount)) * 100));
+}
+
+/** 任务是哪一类（下载面板里显示） */
+export function taskKind(t: Pick<InstallTask, "java" | "loaderFor" | "modpack">) {
+  if (t.java) return "下载 Java";
+  if (t.loaderFor) return "更换加载器";
+  if (t.modpack?.startsWith("file:")) return "导入整合包";
+  if (t.modpack) return "安装整合包";
+  return "安装游戏";
+}
+
+/** 这次打开启动器以来完成的任务（下载面板的“最近完成”） */
+export interface FinishedTask {
+  id: string;
+  name: string;
+  kind: string;
+  at: number;
+}
+
 class Installs {
   tasks = $state<Record<string, InstallTask>>({});
+  recent = $state<FinishedTask[]>([]);
   #listening = false;
+
+  /** 任务成功完成：从进行中拿掉，记进“最近完成”（最多留 20 条） */
+  #finish(id: string) {
+    const t = this.tasks[id];
+    if (!t) return;
+    this.recent = [{ id, name: t.name, kind: taskKind(t), at: Date.now() }, ...this.recent].slice(0, 20);
+    delete this.tasks[id];
+  }
 
   /** 某个游戏版本正在进行（或失败待处理）的任务 */
   forMc(mc: string) {
@@ -803,7 +835,7 @@ class Installs {
       status: "running",
     };
     const done = async () => {
-      delete this.tasks[id];
+      this.#finish(id);
       await library.refresh();
       const p = library.packs.find((x) => x.name === pack.name);
       if (p) library.loadFiles(p, true).catch(() => {});
@@ -822,9 +854,9 @@ class Installs {
         Object.assign(t, { stage: p < 60 ? "下载游戏本体和依赖库" : `安装 ${label}`, stageIndex: Math.min(t.stageCount, 1 + Math.floor(p / 25)), done: p % 25, total: 25 });
         if (p >= 100) {
           clearInterval(timer);
+          this.#finish(id);
           const pk = library.packs.find((x) => x.name === pack.name);
           if (pk) Object.assign(pk, { loader: (loader?.kind ?? "原版") as Loader, loaderVersion: loader?.id ?? null, optifine: null, ...packLook(loader?.kind ?? null) });
-          delete this.tasks[id];
           toast.show(`${pack.name} 已经换成 ${label}（演示）`);
         }
       }, 100);
@@ -876,7 +908,7 @@ class Installs {
         Object.assign(t, p < 20 ? { stage: "测试下载源速度", stageIndex: 1, done: p, total: 20 } : { stage: `下载 Java ${o.major}（BMCLAPI 镜像更快）`, stageIndex: 2, done: p - 20, total: 80 });
         if (p >= 100) {
           clearInterval(timer);
-          delete this.tasks[id];
+          this.#finish(id);
           const off = javas.offers?.find((x) => x.component === o.component);
           if (off) off.installed = { path: `java-${o.major}`, version: `${o.major}.0.0`, major: o.major };
           toast.show(`Java ${o.major} 下载好了（演示）`);
@@ -889,7 +921,7 @@ class Installs {
       .downloadJava(id, o.component, settings.threads)
       .then(async (info) => {
         const src = this.tasks[id]?.stage.match(/（(.+?)更快）/)?.[1];
-        delete this.tasks[id];
+        this.#finish(id);
         await javas.refresh();
         toast.show(`Java ${info.major} 下载好了${src ? `（用的${src}）` : ""}，启动游戏时会自动用它`);
       })
@@ -953,7 +985,7 @@ class Installs {
     api
       .install(req)
       .then(async () => {
-        delete this.tasks[id];
+        this.#finish(id);
         await library.refresh();
         if (!library.current) library.currentId = opt.name;
         toast.show(`${opt.name} 安装完成，可以在版本管理里找到`);
@@ -968,6 +1000,10 @@ class Installs {
           if (t) Object.assign(t, { status: "error", error: msg });
         }
       });
+  }
+
+  clearRecent() {
+    this.recent = [];
   }
 
   cancel(id: string) {
@@ -1028,7 +1064,7 @@ class Installs {
         threads: settings.threads,
       })
       .then(async () => {
-        delete this.tasks[id];
+        this.#finish(id);
         await library.refresh();
         library.currentId = opt.name;
         toast.show(`${opt.title} 装好了，在版本管理里叫「${opt.name}」`);
@@ -1064,7 +1100,7 @@ class Installs {
       }
       if (i >= stages.length) {
         clearInterval(timer);
-        delete this.tasks[id];
+        this.#finish(id);
         library.packs.unshift({
           id: opt.name,
           name: opt.name,

@@ -6,7 +6,8 @@
  * 在弹出层露出来的地方挖一个一样形状的洞——洞里什么都不画，看到的就是系统的云母。
  * 弹出层自己挂在 body 上（不在 .app 里），不会被挖掉；它的底色用卡片材质，看起来和卡片一样是“云母上的一层”。
  * 弹出层滑进滑出时，每一帧按它此刻露出来的位置更新洞；不动了就停下，不占用每一帧。
- * 只在背景材质是云母时这样做（实色背景下面没有云母，挖了只会露出空白）。
+ * 只在背景材质和控件材质都是云母时这样做（实色背景下面没有云母，挖了只会露出空白；
+ * 控件材质选了自定义，用户要的是自己调的不透明度和模糊）。
  */
 
 interface Entry {
@@ -21,7 +22,8 @@ let raf = 0;
 let still = 0;
 let last = "";
 
-const micaOn = () => document.documentElement.dataset.material === "mica";
+/** 背景和控件材质都是云母时才挖（+page.svelte 设置 data-pop）；控件选了自定义，菜单就按自定义的不透明度和模糊来 */
+const micaOn = () => document.documentElement.dataset.pop === "hole";
 
 /** 弹出层此刻露出来的部分：内层和裁剪框的交集 */
 function shown({ clip, sheet }: Entry) {
@@ -93,9 +95,13 @@ export function micaHole(clip: HTMLElement) {
   const wake = () => poke();
   sheet.addEventListener("introstart", wake);
   sheet.addEventListener("outrostart", wake);
+  // 打开着的时候内容变了（比如下载面板里一个任务完成了，面板变矮），洞也跟着变
+  const ro = new ResizeObserver(wake);
+  ro.observe(sheet);
   poke();
   return {
     destroy() {
+      ro.disconnect();
       sheet.removeEventListener("introstart", wake);
       sheet.removeEventListener("outrostart", wake);
       entries.delete(e);

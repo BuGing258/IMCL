@@ -4,6 +4,7 @@
   import { ChevronLeft, Minus, X } from "@lucide/svelte";
   import { fade, fly } from "svelte/transition";
   import { nav, PAGE_TITLES } from "$lib/state.svelte";
+  import DownloadsButton from "./DownloadsButton.svelte";
 
   // 在普通浏览器里预览时没有 Tauri，窗口按钮不做任何事
   const win = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
@@ -32,6 +33,7 @@
   </div>
 
   <div class="controls">
+    <DownloadsButton />
     <button class="wc" onclick={() => win?.minimize()} aria-label="最小化"><Minus size={16} /></button>
     <button class="wc close" onclick={() => win?.close()} aria-label="关闭"><X size={16} /></button>
   </div>
