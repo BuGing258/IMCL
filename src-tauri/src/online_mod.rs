@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::Path;
 
-pub const VERSION: &str = "1.3.5";
+pub const VERSION: &str = "1.3.6";
 
 struct Build {
     mc: &'static str,
@@ -16,9 +16,9 @@ struct Build {
     bytes: &'static [u8],
 }
 
-/// 附属「服务器部署工具」：所有版本共用一个文件（中继 1.3.5+eb29671）
-const ADDON_FILE: &str = "mconline-server-addon-1.3.5.jar";
-static ADDON: &[u8] = include_bytes!("../bundled/mconline/mconline-server-addon-1.3.5.jar");
+/// 附属「服务器部署工具」：所有版本共用一个文件
+const ADDON_FILE: &str = "mconline-server-addon-1.3.6.jar";
+static ADDON: &[u8] = include_bytes!("../bundled/mconline/mconline-server-addon-1.3.6.jar");
 
 /// 一行一个构建：游戏版本、加载器、bundled/mconline 里的文件名
 macro_rules! build {
@@ -29,18 +29,18 @@ macro_rules! build {
 
 // static：每个 jar 在程序里只放一份（const 会在每个用到的地方展开）
 static BUILDS: &[Build] = &[
-    build!("1.20.1", "Fabric", "mconline-fabric-1.3.5.jar"),
-    build!("1.20.1", "Forge", "mconline-forge-1.3.5.jar"),
-    build!("1.21.1", "Fabric", "mconline-fabric-1.21.1-1.3.5.jar"),
-    build!("1.21.1", "NeoForge", "mconline-neoforge-1.21.1-1.3.5.jar"),
-    build!("1.21.10", "Fabric", "mconline-fabric-1.21.10-1.3.5.jar"),
-    build!("1.21.10", "NeoForge", "mconline-neoforge-1.21.10-1.3.5.jar"),
-    build!("1.21.11", "Fabric", "mconline-fabric-1.21.11-1.3.5.jar"),
-    build!("1.21.11", "NeoForge", "mconline-neoforge-1.21.11-1.3.5.jar"),
-    build!("26.1.2", "Fabric", "mconline-fabric-26.1.2-1.3.5.jar"),
-    build!("26.1.2", "NeoForge", "mconline-neoforge-26.1.2-1.3.5.jar"),
-    build!("26.3", "Fabric", "mconline-fabric-26.3-1.3.5.jar"),
-    build!("26.3", "NeoForge", "mconline-neoforge-26.3-1.3.5.jar"),
+    build!("1.20.1", "Fabric", "mconline-fabric-1.3.6.jar"),
+    build!("1.20.1", "Forge", "mconline-forge-1.3.6.jar"),
+    build!("1.21.1", "Fabric", "mconline-fabric-1.21.1-1.3.6.jar"),
+    build!("1.21.1", "NeoForge", "mconline-neoforge-1.21.1-1.3.6.jar"),
+    build!("1.21.10", "Fabric", "mconline-fabric-1.21.10-1.3.6.jar"),
+    build!("1.21.10", "NeoForge", "mconline-neoforge-1.21.10-1.3.6.jar"),
+    build!("1.21.11", "Fabric", "mconline-fabric-1.21.11-1.3.6.jar"),
+    build!("1.21.11", "NeoForge", "mconline-neoforge-1.21.11-1.3.6.jar"),
+    build!("26.1.2", "Fabric", "mconline-fabric-26.1.2-1.3.6.jar"),
+    build!("26.1.2", "NeoForge", "mconline-neoforge-26.1.2-1.3.6.jar"),
+    build!("26.3", "Fabric", "mconline-fabric-26.3-1.3.6.jar"),
+    build!("26.3", "NeoForge", "mconline-neoforge-26.3-1.3.6.jar"),
 ];
 
 fn build_for(mc: &str, loader: &str) -> Option<&'static Build> {
@@ -65,6 +65,13 @@ pub struct Status {
     pub installed: Option<String>,
     /// 已经装着的服务器部署工具文件名
     pub addon: Option<String>,
+    /// 装着的文件和内置的一模一样（按内容比，版本号不变只修 bug 时也能看出要更新）
+    pub current: bool,
+}
+
+/// 文件内容和内置的是不是同一个（先比大小，省得每次都读整个 jar）
+fn same_bytes(path: &Path, bytes: &[u8]) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == bytes.len() as u64) && std::fs::read(path).is_ok_and(|b| b == bytes)
 }
 
 fn find(dir: &Path, addon: bool) -> Option<String> {
@@ -74,12 +81,16 @@ fn find(dir: &Path, addon: bool) -> Option<String> {
 
 pub fn status(game_dir: &Path, version: &str, mc: &str, loader: &str) -> Result<Status> {
     let dir = installed::kind_dir(game_dir, version, "mods")?;
-    Ok(Status {
-        version: VERSION,
-        supported: build_for(mc, loader).is_some(),
-        installed: find(&dir, false),
-        addon: find(&dir, true),
-    })
+    let build = build_for(mc, loader);
+    let installed = find(&dir, false);
+    let addon = find(&dir, true);
+    let current = match (build, &installed) {
+        (Some(b), Some(name)) => {
+            same_bytes(&dir.join(name), b.bytes) && addon.as_ref().is_none_or(|a| same_bytes(&dir.join(a), ADDON))
+        }
+        _ => false,
+    };
+    Ok(Status { version: VERSION, supported: build.is_some(), installed, addon, current })
 }
 
 /// 安装（或重新安装）：先删掉 mods 里所有旧的联机 Mod 文件（包括禁用的），再写入对应版本的 jar。
@@ -109,12 +120,12 @@ mod tests {
 
     #[test]
     fn picks_build() {
-        assert_eq!(build_for("1.20.1", "fabric").map(|b| b.file), Some("mconline-fabric-1.3.5.jar"));
-        assert_eq!(build_for("26.1.2", "NeoForge").map(|b| b.file), Some("mconline-neoforge-26.1.2-1.3.5.jar"));
-        assert_eq!(build_for("26.3", "fabric").map(|b| b.file), Some("mconline-fabric-26.3-1.3.5.jar"));
+        assert_eq!(build_for("1.20.1", "fabric").map(|b| b.file), Some("mconline-fabric-1.3.6.jar"));
+        assert_eq!(build_for("26.1.2", "NeoForge").map(|b| b.file), Some("mconline-neoforge-26.1.2-1.3.6.jar"));
+        assert_eq!(build_for("26.3", "fabric").map(|b| b.file), Some("mconline-fabric-26.3-1.3.6.jar"));
         assert!(build_for("1.21.1", "Forge").is_none());
         // 1.21.10 和 1.21.1 不能混：游戏版本要完全一样
-        assert_eq!(build_for("1.21.10", "Fabric").map(|b| b.file), Some("mconline-fabric-1.21.10-1.3.5.jar"));
+        assert_eq!(build_for("1.21.10", "Fabric").map(|b| b.file), Some("mconline-fabric-1.21.10-1.3.6.jar"));
         assert!(build_for("1.20.4", "Fabric").is_none());
         assert!(build_for("1.20.1", "原版").is_none());
     }
@@ -124,7 +135,7 @@ mod tests {
         assert!(is_ours("mconline-fabric-1.1.0.jar", false));
         assert!(is_ours("mconline-forge-1.2.0.jar.disabled", false));
         assert!(is_ours("mconline-neoforge-26.3-1.3.0.jar", false));
-        assert!(!is_ours("mconline-server-addon-1.3.5.jar", false));
+        assert!(!is_ours("mconline-server-addon-1.3.6.jar", false));
         assert!(is_ours("mconline-server-addon-1.2.0.jar", true));
         assert!(!is_ours("sodium-fabric-0.5.jar", false));
     }
@@ -146,15 +157,27 @@ mod tests {
         assert_eq!(s.installed.as_deref(), Some("mconline-fabric-1.1.0.jar.disabled"));
 
         let s = install(&game, "测试 1.20.1", "1.20.1", "Fabric", true).unwrap();
-        assert_eq!(s.installed.as_deref(), Some("mconline-fabric-1.3.5.jar"));
+        assert_eq!(s.installed.as_deref(), Some("mconline-fabric-1.3.6.jar"));
         assert_eq!(s.addon.as_deref(), Some(ADDON_FILE));
         assert!(!mods.join("mconline-fabric-1.1.0.jar.disabled").exists());
         assert!(mods.join("sodium.jar").exists());
-        assert_eq!(std::fs::read(mods.join("mconline-fabric-1.3.5.jar")).unwrap().len(), BUILDS[0].bytes.len());
+        assert_eq!(std::fs::read(mods.join("mconline-fabric-1.3.6.jar")).unwrap().len(), BUILDS[0].bytes.len());
+        assert!(s.current);
+
+        // 同名但内容是旧构建（版本号没变、只修了 bug）：要显示成可以更新
+        std::fs::write(mods.join("mconline-fabric-1.3.6.jar"), b"PK old build").unwrap();
+        let s = status(&game, "测试 1.20.1", "1.20.1", "Fabric").unwrap();
+        assert_eq!(s.installed.as_deref(), Some("mconline-fabric-1.3.6.jar"));
+        assert!(!s.current);
+        // 部署工具旧了也算
+        let s = install(&game, "测试 1.20.1", "1.20.1", "Fabric", true).unwrap();
+        assert!(s.current);
+        std::fs::write(mods.join(ADDON_FILE), b"PK old addon").unwrap();
+        assert!(!status(&game, "测试 1.20.1", "1.20.1", "Fabric").unwrap().current);
 
         // 重新安装、不要部署工具
         let s = install(&game, "测试 1.20.1", "1.20.1", "Fabric", false).unwrap();
-        assert_eq!(s.installed.as_deref(), Some("mconline-fabric-1.3.5.jar"));
+        assert_eq!(s.installed.as_deref(), Some("mconline-fabric-1.3.6.jar"));
         assert_eq!(s.addon, None);
         let names: Vec<_> = std::fs::read_dir(&mods).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names.len(), 2, "{names:?}");

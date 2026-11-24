@@ -41,8 +41,8 @@
   const running = $derived(game.status !== "idle");
   /** 已装的版本号（从文件名末尾取，比如 mconline-fabric-26.1.2-1.2.0.jar → 1.2.0） */
   const installedVer = $derived(status?.installed?.match(/-(\d+\.\d+\.\d+)\.jar(\.disabled)?$/i)?.[1] ?? null);
-  /** 装的是旧版本：按钮变成「更新」 */
-  const outdated = $derived(!!status && !!installedVer && installedVer !== status.version);
+  /** 装的和内置的不一样（旧版本，或者版本号相同但是修 bug 前的构建）：按钮变成「更新」 */
+  const outdated = $derived(!!status?.installed && !status.current);
 
   async function install() {
     const p = pack;
@@ -111,7 +111,9 @@
           {/if}
         </button>
         {#if outdated && !busy && !running}
-          <p class="hint">「{pack.name}」里装的是 {installedVer}，有新版本</p>
+          <p class="hint">
+            {#if installedVer && installedVer !== status?.version}「{pack.name}」里装的是 {installedVer}，有新版本{:else}「{pack.name}」里装的是旧的构建，有修复更新{/if}
+          </p>
         {:else if status?.installed && !busy}
           <p class="hint ok-text"><Check size={14} />已安装到「{pack.name}」</p>
         {:else if running}

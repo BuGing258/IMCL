@@ -65,11 +65,13 @@ export interface OnlineModStatus {
   installed: string | null;
   /** 已经装着的服务器部署工具文件名 */
   addon: string | null;
+  /** 装着的文件和内置的内容一模一样（版本号不变只修 bug 时靠这个判断要不要更新） */
+  current: boolean;
 }
 
 /** 联机 Mod 支持的游戏版本和加载器（和 online_mod.rs 里的 BUILDS 一致） */
 /** 内置联机 Mod 的版本（和 online_mod.rs 的 VERSION 一致） */
-export const ONLINE_MOD_VERSION = "1.3.5";
+export const ONLINE_MOD_VERSION = "1.3.6";
 export const ONLINE_MOD_BUILDS: { mc: string; loader: string; note: string }[] = [
   { mc: "1.20.1", loader: "Fabric", note: "Fabric Loader 0.14.21+ · Java 17+" },
   { mc: "1.20.1", loader: "Forge", note: "Forge 47+ · Java 17+" },
@@ -581,12 +583,12 @@ export const api = {
   onlineModStatus: (gameDir: string, name: string, mc: string, loader: string): Promise<OnlineModStatus> =>
     isTauri()
       ? invoke("online_mod_status", { gameDir, name, mc, loader })
-      : Promise.resolve({ version: ONLINE_MOD_VERSION, supported: onlineModSupports(mc, loader), installed: null, addon: null }),
+      : Promise.resolve({ version: ONLINE_MOD_VERSION, supported: onlineModSupports(mc, loader), installed: null, addon: null, current: false }),
   installOnlineMod: (gameDir: string, name: string, mc: string, loader: string, addon: boolean): Promise<OnlineModStatus> =>
     isTauri()
       ? invoke("install_online_mod", { gameDir, name, mc, loader, addon })
       : new Promise((r) =>
-          setTimeout(() => r({ version: ONLINE_MOD_VERSION, supported: true, installed: `mconline-${loader.toLowerCase()}-${ONLINE_MOD_VERSION}.jar`, addon: addon ? `mconline-server-addon-${ONLINE_MOD_VERSION}.jar` : null }), 600),
+          setTimeout(() => r({ version: ONLINE_MOD_VERSION, supported: true, installed: `mconline-${loader.toLowerCase()}-${ONLINE_MOD_VERSION}.jar`, addon: addon ? `mconline-server-addon-${ONLINE_MOD_VERSION}.jar` : null, current: true }), 600),
         ),
   memoryPlan: (gameDir: string, version: string | null): Promise<MemoryPlan> =>
     isTauri()
