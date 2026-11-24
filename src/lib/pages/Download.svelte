@@ -3,7 +3,7 @@
   import { slide } from "svelte/transition";
   import { Box, FlaskConical, Search, Download as DownloadIcon, Check, X, LoaderCircle, RefreshCw, Info, History } from "@lucide/svelte";
   import Select from "$lib/components/Select.svelte";
-  import { library, settings, installs, javas, cached, remember, nav } from "$lib/state.svelte";
+  import { library, settings, installs, javas, cached, remember, nav, isPreload } from "$lib/state.svelte";
   import {
     api,
     checkVersionName,
@@ -48,8 +48,11 @@
       loading = false;
     }
   }
-  loadManifest();
-  javas.load();
+  // 预渲染时不联网取列表、不找 Java
+  if (!isPreload()) {
+    loadManifest();
+    javas.load();
+  }
 
   const list = $derived(
     versions.filter((v) => {

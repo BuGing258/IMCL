@@ -30,6 +30,7 @@
 - Mod 一键检查更新、批量更新，单独启用或禁用
 - 安装 Modrinth 整合包，从本地 `.mrpack` 导入
 - 把一个版本导出成 `.mrpack` 整合包，发给朋友就能装上一样的 Mod
+- 内置联机 Mod [Remote Play](https://github.com/BuGing258/MinecraftOnline)：在 Mod 页的「联机」标签一键安装，不用联网（支持 1.20.1 Fabric / Forge，1.21.1、1.21.10、1.21.11、26.1.2、26.3 的 Fabric / NeoForge）
 
 **账户**
 
@@ -119,3 +120,5 @@ src-tauri/src/       后端（Rust）
 ## 许可证
 
 [MIT](LICENSE)
+
+`src-tauri/bundled/mconline/` 里的 Remote Play 联机 Mod 是单独的项目，按 [GPL-3.0](https://github.com/BuGing258/MinecraftOnline) 发布，源代码见 <https://github.com/BuGing258/MinecraftOnline>；它只是随启动器一起分发，不受本项目 MIT 许可证约束。

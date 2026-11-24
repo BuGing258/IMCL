@@ -1,3 +1,4 @@
+import { getContext } from "svelte";
 import { invoke } from "@tauri-apps/api/core";
 // 全局界面状态（Svelte 5 runes）。
 // 已接后端：系统状态、下载安装、已安装版本。其余（Mod 市场、启动游戏、账户登录）仍是前端模拟。
@@ -21,6 +22,14 @@ export const PAGE_TITLES: Record<PageId, string> = {
 
 /** 页面切换滑动的时长（毫秒），+page.svelte 里的动画也用这个 */
 export const PAGE_SLIDE_MS = 460;
+
+/**
+ * 预渲染：启动后空闲时把各页在看不见的地方画一遍（见 +page.svelte），
+ * 让浏览器提前排好、画好里面的中文，第一次真正打开时就不卡。预渲染的页面不加载任何数据
+ */
+export const PRELOAD = Symbol("preload");
+/** 当前页面是不是预渲染出来的（只能在组件初始化时调用） */
+export const isPreload = () => getContext(PRELOAD) === true;
 
 class Nav {
   stack = $state<PageId[]>(["home"]);
@@ -67,7 +76,8 @@ class Nav {
 export const nav = new Nav();
 
 /** 跨页面共享的小状态，比如从版本管理跳到 Mod 页时预先选好“光影”标签 */
-export const ui = $state<{ resKind: MarketKind; resQuery: string }>({ resKind: "mod", resQuery: "" });
+/** resOnline：Mod 页选的是「联机」标签（内置联机 Mod），这时不搜索 */
+export const ui = $state<{ resKind: MarketKind; resQuery: string; resOnline: boolean }>({ resKind: "mod", resQuery: "", resOnline: false });
 
 /* ---------- localStorage 小工具 ---------- */
 function load<T>(key: string, fallback: T): T {

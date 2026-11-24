@@ -19,6 +19,8 @@
   import { scrollWithin } from "$lib/theme";
   import { ChevronDown, Check, Plus } from "@lucide/svelte";
   import { tick } from "svelte";
+  import { dropSheet } from "$lib/motion";
+  import { micaHole, portal } from "$lib/micaHole";
 
   interface Props {
     value: string;
@@ -51,6 +53,9 @@
 
   const uid = `sel-${Math.random().toString(36).slice(2, 8)}`;
   let open = $state(false);
+  /** 弹出层在不在页面上：关的时候 open 先变 false，滑走以后才拿掉 */
+  let shown = $state(false);
+  let popEl = $state<HTMLDivElement>();
   let active = $state(-1);
   let trigger = $state<HTMLButtonElement>();
   let list = $state<HTMLDivElement>();
@@ -97,10 +102,19 @@
   async function show() {
     if (disabled || open) return;
     place();
-    open = true;
+    open = shown = true;
     active = Math.max(0, options.findIndex((o) => o.value === value));
     await tick();
+    fit();
     scrollToActive();
+  }
+
+  /** 菜单比按钮宽（选项名字长、右边有灰色小字）时，右边可能伸出窗口：改成和按钮右边对齐。在第一帧画出来之前做 */
+  function fit() {
+    if (!popEl || !trigger) return;
+    const w = popEl.offsetWidth;
+    const r = trigger.getBoundingClientRect();
+    if (pos.left + w > window.innerWidth - 8) pos.left = Math.max(8, Math.min(r.right, window.innerWidth - 8) - w);
   }
 
   function hide(focus = true) {
@@ -183,12 +197,6 @@
     }
   }
 
-  /** 把弹出层挂到 body 上，不被父元素的 overflow 裁掉 */
-  function portal(node: HTMLElement) {
-    document.body.appendChild(node);
-    return { destroy: () => node.remove() };
-  }
-
   // 打开时：点外面、滚动页面、改变窗口大小都会关掉
   $effect(() => {
     if (!open) return;
@@ -237,10 +245,15 @@
   <ChevronDown size={size === "sm" ? 14 : 15} class="chev" />
 </button>
 
-{#if open}
-  <!-- 外层只定位；阴影、圆角裁剪、材质分在三层上（原因见 motion.ts） -->
+{#if shown}
+  <!-- 外层只定位；阴影、圆角裁剪、材质分在三层上（原因见 motion.ts）。
+       滑进滑出见 motion.ts 的 dropSheet：关的途中再打开，会从当前位置接着滑回来。
+       云母背景下，下面的页面会在菜单的位置挖空，透出真正的云母（见 micaHole.ts） -->
   <div
     use:portal
+    use:dropSheet={{ open, up: pos.up, onclosed: () => (shown = false) }}
+    bind:this={popEl}
+    inert={!open}
     class="pop"
     class:up={pos.up}
     class:mono
@@ -249,7 +262,7 @@
     style:min-width="{pos.width}px"
   >
   <div class="shade-clip"><div class="shade"></div></div>
-  <div class="clip">
+  <div class="clip" use:micaHole>
   <div
     bind:this={list}
     id={uid}
@@ -379,6 +392,8 @@
   .pop {
     position: fixed;
     z-index: 1000;
+    /* 按内容自己的宽度，不被“左边到窗口右边还剩多少”挤窄：量到的才是真宽度，fit() 才能把伸出窗口的挪回来 */
+    width: max-content;
     max-width: min(480px, calc(100vw - 16px));
     font-family: var(--font);
     color: var(--text);
@@ -404,12 +419,10 @@
     bottom: 60px;
     border-radius: var(--r);
     box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08);
-    animation: shade-in 0.22s var(--ease);
   }
   .pop.up .shade {
     top: 60px;
     bottom: 0;
-    animation-name: shade-in-up;
   }
   /* 裁剪层：只裁圆角 */
   .clip {
@@ -417,7 +430,7 @@
     border-radius: var(--r);
     overflow: hidden;
   }
-  /* 内层：材质 + 滚动，只用 transform 从上沿（向上弹出时从下沿）滑进来，模糊全程都在 */
+  /* 内层：材质 + 滚动，只用 transform 从上沿（向上弹出时从下沿）滑进滑出（dropSheet） */
   .sheet {
     overflow-y: auto;
     padding: 5px;
@@ -425,34 +438,11 @@
     background: var(--pop-bg);
     backdrop-filter: var(--pop-filter);
     border: 1px solid var(--border-strong);
-    animation: sheet-in 0.22s var(--ease);
   }
-  .pop.up .sheet {
-    animation-name: sheet-in-up;
-  }
-  /* 阴影层：和菜单一起滑，阴影从无到有（菜单还藏着时阴影就露在裁剪框里，会是一截顶上被裁平的阴影） */
-  @keyframes shade-in {
-    from {
-      transform: translateY(calc(-100% - 2px));
-      box-shadow: 0 10px 32px rgba(0, 0, 0, 0), 0 2px 6px rgba(0, 0, 0, 0);
-    }
-  }
-  @keyframes shade-in-up {
-    from {
-      transform: translateY(calc(100% + 2px));
-      box-shadow: 0 10px 32px rgba(0, 0, 0, 0), 0 2px 6px rgba(0, 0, 0, 0);
-    }
-  }
-  /* 多滑出 2px，避免停在裁剪边上留下一条细线 */
-  @keyframes sheet-in {
-    from {
-      transform: translateY(calc(-100% - 2px));
-    }
-  }
-  @keyframes sheet-in-up {
-    from {
-      transform: translateY(calc(100% + 2px));
-    }
+  /* 云母背景：下面已经挖空透出云母，底色和卡片一样，不再叠模糊 */
+  :global(:root[data-material="mica"]) .sheet {
+    background: var(--surface);
+    backdrop-filter: none;
   }
 
   .opt {

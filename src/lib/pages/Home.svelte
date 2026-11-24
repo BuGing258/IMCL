@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { smooth, sheetIn } from "$lib/motion";
+  import { smooth, dropSheet } from "$lib/motion";
   import { scrollWithin } from "$lib/theme";
   import { Tween } from "svelte/motion";
   import { fly } from "svelte/transition";
@@ -22,10 +22,11 @@
   import Avatar from "$lib/components/Avatar.svelte";
   import { nav, library, game, settings, accounts, sysmon, installs, ACCOUNT_LABELS, fmtTime, fmtMem } from "$lib/state.svelte";
   import { api } from "$lib/api";
+  import { micaHole, portal } from "$lib/micaHole";
 
   let pickerOpen = $state(false);
-  /** 版本菜单的阴影（动画里会按进度调浓淡，见 motion.ts 的 sheetIn） */
-  const PICKER_SHADOW = "0 12px 32px rgba(0, 0, 0, 0.18)";
+  /** 菜单在不在页面上：关的时候 pickerOpen 先变 false，滑走以后才拿掉（见 motion.ts 的 dropSheet） */
+  let pickerShown = $state(false);
   let active = $state(0);
   let listEl = $state<HTMLDivElement>();
   const canSwitch = $derived(game.status === "idle");
@@ -82,8 +83,13 @@
     if (!shown) pickerOpen = false;
   });
 
+  // 菜单挂在 body 上（云母下要在它下面挖洞透出云母，不能在被挖的页面里，见 micaHole.ts），按卡片的位置摆
+  let wrapEl = $state<HTMLElement>();
+  let pickerPos = $state({ left: 0, top: 0, width: 0 });
   async function openPicker() {
-    pickerOpen = true;
+    const r = wrapEl?.getBoundingClientRect();
+    if (r) pickerPos = { left: r.left, top: r.bottom + 6, width: r.width };
+    pickerOpen = pickerShown = true;
     active = Math.max(0, library.packs.findIndex((p) => p.id === library.currentId));
     await tick();
     scrollActive("center");
@@ -144,7 +150,7 @@
   });
 </script>
 
-<svelte:window onkeydown={onKey} onclick={() => (pickerOpen = false)} />
+<svelte:window onkeydown={onKey} onclick={() => (pickerOpen = false)} onresize={() => (pickerOpen = false)} />
 
 <div class="home">
   <section class="left">
@@ -153,7 +159,7 @@
       <p class="faint">今天玩点什么？</p>
     </header>
 
-    <div class="picker-wrap">
+    <div class="picker-wrap" bind:this={wrapEl}>
       {#if pack}
         <button
           class="pack-card"
@@ -189,12 +195,21 @@
         </button>
       {/if}
 
-      {#if pickerOpen && pack}
+      {#if pickerShown && pack}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="picker" onclick={(e) => e.stopPropagation()}>
-          <div class="shade-clip"><div class="shade" in:sheetIn={{ shadow: PICKER_SHADOW }} out:sheetIn={{ duration: 160, shadow: PICKER_SHADOW }}></div></div>
-          <div class="clip">
-          <div class="sheet" in:sheetIn out:sheetIn={{ duration: 160 }}>
+        <div
+          class="picker"
+          use:portal
+          use:dropSheet={{ open: pickerOpen, onclosed: () => (pickerShown = false) }}
+          inert={!pickerOpen}
+          style:left="{pickerPos.left}px"
+          style:top="{pickerPos.top}px"
+          style:width="{pickerPos.width}px"
+          onclick={(e) => e.stopPropagation()}
+        >
+          <div class="shade-clip"><div class="shade"></div></div>
+          <div class="clip" use:micaHole>
+          <div class="sheet">
           <div class="pk-head">
             <span>选择版本</span>
             <span class="faint">共 {library.packs.length} 个</span>
@@ -407,11 +422,10 @@
   }
 
   .picker {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
-    z-index: 20;
+    position: fixed;
+    z-index: 1000;
+    font-family: var(--font);
+    color: var(--text);
     /* 分层的原因见 motion.ts */
   }
   /* 不动的裁剪框：上沿和菜单上沿对齐，左右下各留 60px 给阴影 */
@@ -442,6 +456,10 @@
     background: var(--surface);
     backdrop-filter: var(--card-filter);
     border: 1px solid var(--border-strong);
+  }
+  /* 云母背景：下面已经挖空透出云母，不再叠模糊 */
+  :global(:root[data-material="mica"]) .sheet {
+    backdrop-filter: none;
   }
   .pk-head {
     display: flex;

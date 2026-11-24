@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search, Wrench, CircleArrowUp, LoaderCircle } from "@lucide/svelte";
+  import { Play, Square, Plus, FolderOpen, PackageOpen, Puzzle, Check, X, Sun, Image, RefreshCw, Layers, SlidersHorizontal, FolderX, Search, Wrench, CircleArrowUp, LoaderCircle, Trash2, Ban, CircleCheck } from "@lucide/svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { SvelteSet } from "svelte/reactivity";
+  import { fly } from "svelte/transition";
+  import { smooth } from "$lib/motion";
   import PackCover from "$lib/components/PackCover.svelte";
   import Select from "$lib/components/Select.svelte";
   import VersionSettings from "$lib/components/VersionSettings.svelte";
   import ExportPackDialog from "$lib/components/ExportPackDialog.svelte";
   import ChangeLoaderDialog from "$lib/components/ChangeLoaderDialog.svelte";
-  import { library, game, nav, toast, ui, settings, gameDirs, installs, cached, remember } from "$lib/state.svelte";
+  import { library, game, nav, toast, ui, settings, gameDirs, installs, cached, remember, isPreload } from "$lib/state.svelte";
   import { api, fmtRelative, type ModUpdate } from "$lib/api";
   import { marketName, RES_LABELS, type Pack, type ResKind } from "$lib/mock";
 
@@ -20,8 +23,6 @@
   let changing = $state<Pack | null>(null);
   let tab = $state<Tab>("mod");
   let filesErr = $state("");
-  let confirmKey = $state<string | null>(null);
-  let confirmTimer: ReturnType<typeof setTimeout> | undefined;
 
   const sel = $derived<Pack | undefined>(library.packs.find((p) => p.id === selId) ?? library.packs[0]);
   const isCurrent = $derived(!!sel && sel.id === library.currentId);
@@ -59,15 +60,18 @@
   // 每次打开版本管理都重新扫一遍：在文件夹里直接删掉、加进来或改过的版本马上就能看到。
   // 已经读过的 Mod / 光影 / 材质包也作废：当前选中的版本立刻重读，其他版本等选中时再读
   // 等页面滑完再扫：扫描结果要重新排版整页，放在滑动途中会卡一下
-  nav.settled().then(() => library.refresh()).then(() => {
-    for (const p of library.packs) if (p.real && p !== sel) p.filesLoaded = false;
-    if (sel?.real && sel.filesLoaded) library.loadFiles(sel, true).catch((e) => (filesErr = String(e)));
-  });
+  // 预渲染时不扫描、不查更新（见 isPreload）
+  const preload = isPreload();
+  if (!preload)
+    nav.settled().then(() => library.refresh()).then(() => {
+      for (const p of library.packs) if (p.real && p !== sel) p.filesLoaded = false;
+      if (sel?.real && sel.filesLoaded) library.loadFiles(sel, true).catch((e) => (filesErr = String(e)));
+    });
 
   // 选中真实版本时读取它文件夹里的内容
   $effect(() => {
     const p = sel;
-    if (!p?.real || p.filesLoaded) return;
+    if (preload || !p?.real || p.filesLoaded) return;
     filesErr = "";
     nav.settled().then(() => library.loadFiles(p)).catch((e) => (filesErr = String(e)));
   });
@@ -117,6 +121,42 @@
 
   /* ---------- 更换加载器的进度 ---------- */
   const loaderTask = $derived(sel ? Object.values(installs.tasks).find((t) => t.loaderFor === sel.name) : undefined);
+
+  /* ---------- 删除版本（加载器按钮右边）----------
+   * 和版本设置里的一样：点一次变成“确认删除”，3 秒内再点才把整个版本文件夹移到回收站；
+   * 这个版本正在运行、正在换加载器时不能删
+   */
+  let delArmed = $state(false);
+  let deletingVer = $state(false);
+  let delTimer: ReturnType<typeof setTimeout> | undefined;
+  const delBlocked = $derived(mine ? "游戏正在运行，关掉后才能删除" : loaderTask && loaderTask.status !== "error" ? "正在更换加载器，完成后才能删除" : "");
+  // 换了选中的版本，没确认的删除作废
+  $effect(() => {
+    void sel?.id;
+    delArmed = false;
+    clearTimeout(delTimer);
+  });
+  async function deleteSel() {
+    const p = sel;
+    if (!p || deletingVer || delBlocked) return;
+    if (!delArmed) {
+      delArmed = true;
+      clearTimeout(delTimer);
+      delTimer = setTimeout(() => (delArmed = false), 3000);
+      return;
+    }
+    clearTimeout(delTimer);
+    delArmed = false;
+    deletingVer = true;
+    try {
+      await library.deleteVersion(p);
+      toast.show(`已把「${p.name}」移到回收站`);
+    } catch (e) {
+      toast.show(String(e));
+    } finally {
+      deletingVer = false;
+    }
+  }
   const loaderPct = $derived(
     loaderTask ? Math.min(99, Math.floor(((Math.max(1, loaderTask.stageIndex) - 1 + (loaderTask.total ? loaderTask.done / loaderTask.total : 0)) / Math.max(1, loaderTask.stageCount)) * 100)) : 0,
   );
@@ -166,7 +206,7 @@
 
   // 打开（或切到）Mod 标签时自动检查一次；Mod 列表读出来之后再查
   $effect(() => {
-    if (tab !== "mod" || !sel || sel.loader === "原版" || !sel.mods.length || checked || checking || updating) return;
+    if (preload || tab !== "mod" || !sel || sel.loader === "原版" || !sel.mods.length || checked || checking || updating) return;
     if (sel.real && !sel.filesLoaded) return;
     checkUpdates(true);
   });
@@ -227,27 +267,131 @@
     }
   }
 
-  // 删除要点两次：第一次变成“确认”，3 秒内再点才删除
-  async function removeRes(kind: "shader" | "resourcepack", id: string) {
-    if (!sel) return;
-    const key = `${kind}:${id}`;
-    if (confirmKey !== key) {
-      confirmKey = key;
-      clearTimeout(confirmTimer);
-      confirmTimer = setTimeout(() => (confirmKey = null), 3000);
-      return;
-    }
-    confirmKey = null;
-    const k = listKey(kind);
-    try {
-      if (sel.real) await api.trashFile(settings.gameDir, sel.name, dirName(kind), id);
-      sel[k] = sel[k].filter((x) => x !== id);
-      toast.show(sel.real ? `已把 ${resName(kind, id)} 移到回收站` : `已移除 ${resName(kind, id)}`);
-    } catch (e) {
-      toast.show(String(e));
+  /* ---------- 批量选择：Mod、光影、材质包 ----------
+   * 点一行选中，再点取消；Shift 连选；Ctrl+A 全选当前列表；Esc 取消选择。
+   * 选中后底部出现操作条：启用 / 禁用（只有 Mod）、删除（移到回收站，要点两下确认）、取消
+   */
+  const chosen = new SvelteSet<string>();
+  let anchor: string | null = null;
+  let armed = $state(false);
+  let armTimer: ReturnType<typeof setTimeout> | undefined;
+  let batchBusy = $state<{ done: number; total: number } | null>(null);
+
+  /** 当前标签里显示出来的文件（搜索过滤后的），顺序和列表一致 */
+  const visibleIds = $derived(!sel || tab === "settings" ? [] : tab === "mod" ? shownMods.map((m) => m.id) : shownRes(tab, sel[listKey(tab)]));
+  /** 只对看得见的生效：搜索把选中的项过滤掉了，就不会被误删 */
+  const chosenList = $derived(visibleIds.filter((id) => chosen.has(id)));
+  const chosenMods = $derived(tab === "mod" && sel ? sel.mods.filter((m) => chosen.has(m.id) && visibleIds.includes(m.id)) : []);
+
+  function clearChosen() {
+    chosen.clear();
+    anchor = null;
+    armed = false;
+  }
+  // 换版本、换标签时清空选择
+  $effect(() => {
+    void [sel?.id, tab];
+    clearChosen();
+  });
+
+  function pick(id: string, e: MouseEvent) {
+    // 行里的开关、更新勾选框自己处理，不算选行
+    if ((e.target as HTMLElement).closest("button, input, a") || batchBusy) return;
+    if (e.shiftKey && anchor && visibleIds.includes(anchor)) {
+      const a = visibleIds.indexOf(anchor);
+      const b = visibleIds.indexOf(id);
+      for (const x of visibleIds.slice(Math.min(a, b), Math.max(a, b) + 1)) chosen.add(x);
+    } else if (chosen.has(id)) chosen.delete(id);
+    else chosen.add(id);
+    anchor = id;
+    armed = false;
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (preload || tab === "settings" || changing || exporting || batchBusy) return;
+    const t = e.target as HTMLElement;
+    const typing = t?.closest?.("input, textarea, [contenteditable='true']");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !typing && visibleIds.length) {
+      e.preventDefault();
+      for (const id of visibleIds) chosen.add(id);
+      armed = false;
+    } else if (e.key === "Escape" && chosenList.length && !typing) {
+      // 先取消选择，不返回上一页（捕获阶段，拦在全局的 Esc 前面）
+      e.stopPropagation();
+      clearChosen();
     }
   }
+
+  /** 批量启用或禁用选中的 Mod */
+  async function setChosenEnabled(on: boolean) {
+    const p = sel;
+    if (!p || batchBusy) return;
+    const todo = chosenMods.filter((m) => m.enabled !== on);
+    batchBusy = { done: 0, total: todo.length };
+    const failed: string[] = [];
+    for (const m of todo) {
+      try {
+        const old = m.id;
+        if (p.real) m.id = await api.setModEnabled(settings.gameDir, p.name, m.id, on);
+        m.enabled = on;
+        // 启用 / 禁用会改文件名（加上或去掉 .disabled），选择跟着换
+        chosen.delete(old);
+        chosen.add(m.id);
+      } catch {
+        failed.push(m.name);
+      }
+      batchBusy = { done: batchBusy!.done + 1, total: todo.length };
+    }
+    batchBusy = null;
+    armed = false;
+    if (failed.length) toast.show(`${failed.join("、")} ${on ? "启用" : "禁用"}失败（游戏是不是还开着？）`);
+  }
+
+  /** 删除选中的文件：第一次点变成“确认”，3 秒内再点才删；移到回收站，可以还原 */
+  async function deleteChosen() {
+    const p = sel;
+    if (!p || batchBusy || tab === "settings") return;
+    if (!armed) {
+      armed = true;
+      clearTimeout(armTimer);
+      armTimer = setTimeout(() => (armed = false), 3000);
+      return;
+    }
+    armed = false;
+    const kind = tab;
+    const todo = [...chosenList];
+    batchBusy = { done: 0, total: todo.length };
+    const gone = new Set<string>();
+    const failed: string[] = [];
+    for (const id of todo) {
+      try {
+        if (p.real) await api.trashFile(settings.gameDir, p.name, dirName(kind), id);
+        gone.add(id);
+      } catch {
+        failed.push(kind === "mod" ? (p.mods.find((m) => m.id === id)?.name ?? id) : resName(kind, id));
+      }
+      batchBusy = { done: batchBusy!.done + 1, total: todo.length };
+    }
+    if (kind === "mod") {
+      p.mods = p.mods.filter((m) => !gone.has(m.id));
+      // 删掉的 Mod 也不再提示更新
+      for (const id of gone) {
+        delete updates[`mods/${id}`];
+        delete picked[`mods/${id}`];
+      }
+    } else {
+      const k = listKey(kind);
+      p[k] = p[k].filter((x) => !gone.has(x));
+    }
+    for (const id of gone) chosen.delete(id);
+    batchBusy = null;
+    const what = kind === "mod" ? " Mod" : RES_LABELS[kind];
+    if (failed.length) toast.show(`${failed.join("、")} 删除失败（游戏是不是还开着？）`);
+    else toast.show(p.real ? `已把 ${gone.size} 个${what}移到回收站` : `已移除 ${gone.size} 个${what}`);
+  }
 </script>
+
+<svelte:window onkeydowncapture={onKey} />
 
 <div class="versions">
   <aside class="list">
@@ -343,6 +487,15 @@
                 <button class="btn btn-pill" onclick={() => (changing = sel ?? null)} disabled={!!loaderTask && loaderTask.status !== "error"} title="更换加载器或加载器版本">
                   <Wrench size={14} />加载器
                 </button>
+                <button
+                  class="btn btn-pill del-ver"
+                  class:armed={delArmed}
+                  onclick={deleteSel}
+                  disabled={deletingVer || !!delBlocked}
+                  title={delBlocked || (sel.isolated === false ? "版本文件夹移到回收站，共用的 Mod 和存档不受影响" : "整个版本文件夹移到回收站，包括它自己的 Mod、存档和配置")}
+                >
+                  {#if deletingVer}<LoaderCircle size={14} class="spin" />正在删除{:else}<Trash2 size={14} />{delArmed ? "确认删除" : "删除"}{/if}
+                </button>
               </div>
               {#if loaderTask}
                 <div class="lt" class:bad={loaderTask.status === "error"}>
@@ -425,7 +578,17 @@
                 </div>
                 {#each shownMods as m, k (m.id)}
                   {@const up = updOf(m)}
-                  <div class="tr" class:off={!m.enabled} class:has-up={!!up}>
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <div
+                    class="tr pickable"
+                    class:off={!m.enabled}
+                    class:has-up={!!up}
+                    class:chosen={chosen.has(m.id)}
+                    role="option"
+                    tabindex="-1"
+                    aria-selected={chosen.has(m.id)}
+                    onclick={(e) => pick(m.id, e)}
+                  >
                     {#if up}
                       <input type="checkbox" class="ck" bind:checked={picked[up.file]} disabled={!!updating} aria-label="更新 {m.name}" />
                     {:else}
@@ -469,20 +632,17 @@
             {#if sel[key].length}
               <div class="res-list">
                 {#each shownRes(tab as ResKind, sel[key]) as id (id)}
-                  {@const confirming = confirmKey === `${tab}:${id}`}
-                  <div class="res">
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <div
+                    class="res pickable"
+                    class:chosen={chosen.has(id)}
+                    role="option"
+                    tabindex="-1"
+                    aria-selected={chosen.has(id)}
+                    onclick={(e) => pick(id, e)}
+                  >
                     <span class="res-ic">{#if tab === "shader"}<Sun size={16} />{:else}<Image size={16} />{/if}</span>
                     <span class="name" title={id}>{resName(tab as ResKind, id)}</span>
-                    <button
-                      class="btn btn-sm"
-                      class:btn-icon={!confirming}
-                      class:confirm={confirming}
-                      aria-label="移除 {resName(tab as ResKind, id)}"
-                      title={sel.real ? "移到回收站" : "移除"}
-                      onclick={() => removeRes(tab as "shader" | "resourcepack", id)}
-                    >
-                      {#if confirming}{sel.real ? "确认移到回收站" : "确认移除"}{:else}<X size={14} />{/if}
-                    </button>
                   </div>
                 {:else}
                   <p class="no-match">没有名字里带「{q.trim()}」的{RES_LABELS[tab]}</p>
@@ -496,6 +656,34 @@
               </div>
             {/if}
           {/if}
+          {#if visibleIds.length}
+            <p class="pick-tip">点击选中，可以多选（Shift 连选，Ctrl+A 全选），然后{tab === "mod" ? "批量启用、禁用或" : ""}删除</p>
+          {/if}
+
+          <!-- 选中后的操作条：贴在面板底部，滚动时也一直在 -->
+          <div class="batch-dock">
+            {#if chosenList.length}
+              <div class="batch-pos">
+                <div class="batch" role="toolbar" aria-label="选中的文件" transition:fly={{ y: 16, duration: 200, easing: smooth }}>
+                  {#if batchBusy}
+                    <span class="b-count"><LoaderCircle size={14} class="spin" />正在处理 {batchBusy.done}/{batchBusy.total}</span>
+                  {:else}
+                    <span class="b-count">已选 {chosenList.length} 个</span>
+                    {#if chosenMods.some((m) => !m.enabled)}
+                      <button class="btn btn-sm btn-pill" onclick={() => setChosenEnabled(true)}><CircleCheck size={13} />启用</button>
+                    {/if}
+                    {#if chosenMods.some((m) => m.enabled)}
+                      <button class="btn btn-sm btn-pill" onclick={() => setChosenEnabled(false)}><Ban size={13} />禁用</button>
+                    {/if}
+                    <button class="btn btn-sm btn-pill b-del" class:armed onclick={deleteChosen} title={sel.real ? "移到回收站，可以还原" : "移除"}>
+                      <Trash2 size={13} />{armed ? `确认删除 ${chosenList.length} 个` : "删除"}
+                    </button>
+                    <button class="btn btn-sm btn-pill" onclick={clearChosen}>取消</button>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          </div>
         </div>
       {/key}
     {/if}
@@ -633,6 +821,10 @@
   }
   .detail-inner {
     padding: 12px 28px 28px;
+    /* 至少占满面板高度，底部的操作条（batch-dock）才能贴在面板底部 */
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
   }
   .hero {
     display: flex;
@@ -844,6 +1036,8 @@
   .table {
     display: flex;
     flex-direction: column;
+    /* 行与行之间留 2px：连着选中几行时，红色高亮一行一块，不会糊成一整片 */
+    gap: 2px;
     padding: 4px 6px 6px;
     background: var(--surface);
     backdrop-filter: var(--card-filter);
@@ -920,9 +1114,89 @@
     justify-content: center;
     flex-shrink: 0;
   }
-  .confirm {
+  /* 可以点选的行 */
+  .pickable {
+    cursor: pointer;
+    user-select: none;
+  }
+  .tr.chosen,
+  .tr.chosen:hover,
+  .res.chosen {
+    background: var(--red-soft);
+  }
+  .res.chosen {
+    border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  }
+  .res.pickable:hover:not(.chosen) {
+    background: var(--hover);
+  }
+  .pick-tip {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-3);
+    text-align: center;
+  }
+
+  /* 操作条：sticky 的零高度容器贴在面板底部，条本身绝对定位在它上面 */
+  .batch-dock {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    height: 0;
+    z-index: 5;
+  }
+  .batch-pos {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 14px;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .batch {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    /* 右边比上下多 2px：两头是半圆，按钮离右沿看起来会比离上下沿近，几何上相等反而显得右边挤 */
+    padding: 5px 7px 5px 16px;
+    border-radius: 999px;
+    background: var(--pop-bg);
+    backdrop-filter: var(--pop-filter);
+    border: 1px solid var(--border-strong);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    font-size: 13px;
+  }
+  .b-count {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 6px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .b-del {
+    color: var(--red);
+  }
+  .b-del.armed {
+    background: var(--red);
+    border-color: var(--red);
+    color: var(--on-red);
+  }
+  .b-del.armed:hover {
+    background: var(--red-hover);
+  }
+  /* 删除版本：平时和旁边的按钮一样，悬停变红；点了一次（等确认）整个变红 */
+  .del-ver:not(:disabled):hover {
     border-color: var(--red);
     color: var(--red);
+  }
+  .del-ver.armed,
+  .del-ver.armed:hover {
+    background: var(--red);
+    border-color: var(--red);
+    color: var(--on-red);
   }
 
   .empty {

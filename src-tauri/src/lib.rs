@@ -10,6 +10,7 @@ pub mod modpack;
 pub mod modpack_export;
 pub mod modrinth;
 pub mod net;
+pub mod online_mod;
 pub mod skin;
 pub mod sysmon;
 pub mod task;
@@ -64,6 +65,8 @@ pub fn run() {
             commands::cancel_install,
             commands::list_installed,
             commands::delete_version,
+            commands::online_mod_status,
+            commands::install_online_mod,
             commands::version_files,
             commands::set_mod_enabled,
             commands::trash_version_file,

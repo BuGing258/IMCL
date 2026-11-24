@@ -6,6 +6,7 @@
   import Tooltip from "$lib/components/Tooltip.svelte";
   import GameProblem from "$lib/components/GameProblem.svelte";
   import Backdrop from "$lib/components/Backdrop.svelte";
+  import Preload from "$lib/components/Preload.svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { invoke } from "@tauri-apps/api/core";
   import { onColor } from "$lib/theme";
@@ -24,6 +25,8 @@
   // 不然会先看到空窗口，接着打开云母时系统重画整个窗口，正好压在进场动画上，看起来卡一下。
   // 隐藏的窗口不跑 requestAnimationFrame，所以这里只等挂载完成，不等画面帧；后端 3 秒后还会兜底显示
   onMount(() => {
+    // 窗口显示、首页动起来之后再开始预渲染
+    setTimeout(preloadPages, 800);
     if (!isTauri()) return;
     const mica = settings.material === "mica";
     const applyMica = () => (mica ? invoke("set_backdrop", { mica: true }).catch(() => {}) : Promise.resolve());
@@ -47,6 +50,45 @@
     accounts: Accounts,
     settings: Settings,
   };
+
+  /* ---------- 预渲染 ----------
+   * 第一次打开某一页时，浏览器要现场给里面的中文找字体、排字、画字形，实测多花 20~40ms，
+   * 正好卡在点击和滑动开头；第二次打开就快了，因为这些都缓存住了。
+   * 所以启动后趁空闲、停在首页时，把还没打开过的页面逐个在看不见的地方挂上画一遍再拿掉。
+   * 预渲染的页面不加载任何数据（见 isPreload）。
+   */
+  const PRELOAD_ORDER: PageId[] = ["settings", "versions", "resources", "download", "accounts"];
+  const opened = new Set<PageId>();
+  $effect(() => {
+    opened.add(nav.current);
+  });
+  let preloading = $state<PageId | null>(null);
+
+  function preloadPages() {
+    const queue = PRELOAD_ORDER.slice();
+    const idle = () =>
+      new Promise<void>((r) => ("requestIdleCallback" in window ? requestIdleCallback(() => r(), { timeout: 4000 }) : setTimeout(r, 300)));
+    const run = async () => {
+      for (;;) {
+        await idle();
+        // 不在首页（或者正在滑动）时先不做，过一会儿再看
+        if (nav.current !== "home") {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        await nav.settled();
+        if (nav.current !== "home") continue;
+        const p = queue.shift();
+        if (!p) return;
+        if (opened.has(p)) continue;
+        preloading = p;
+        // 留几帧让它真正画出来：字形是在绘制时才生成的，只排版不绘制没有用
+        await new Promise((r) => setTimeout(r, 150));
+        preloading = null;
+      }
+    };
+    run();
+  }
 
   // 账户变化时保存
   $effect(() => {
@@ -333,6 +375,13 @@
         </div>
       {/if}
     {/key}
+    <!-- 预渲染（见上面 preloadPages）：压在首页下面、几乎全透明，不能点；离开首页时立刻拿掉 -->
+    {#if preloading && nav.current === "home"}
+      {@const Page = PAGES[preloading]}
+      <div class="preload" inert aria-hidden="true">
+        <div class="page-body"><Preload><Page /></Preload></div>
+      </div>
+    {/if}
   </main>
   <Toast />
   <Tooltip />
@@ -365,6 +414,16 @@
     inset: 0;
     /* 切换时宽度会变小（被另一页裁掉），里面的内容宽度不变 */
     overflow: hidden;
+  }
+  /* 不用 .page 这个类：切换动画按 .page 找页面算位置，预渲染的不能掺进去 */
+  .preload {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: -1;
+    /* 不能是 0：完全透明的东西浏览器不画，字形就不会生成 */
+    opacity: 0.01;
+    pointer-events: none;
   }
   .page-body {
     position: absolute;

@@ -55,6 +55,38 @@ export interface MemoryPlan {
   autoMb: number;
 }
 
+/** 内置联机 Mod 在某个版本里的情况（见 online_mod.rs） */
+export interface OnlineModStatus {
+  /** 内置的 Mod 版本 */
+  version: string;
+  /** 这个游戏版本 + 加载器能不能装 */
+  supported: boolean;
+  /** 已经装着的文件名 */
+  installed: string | null;
+  /** 已经装着的服务器部署工具文件名 */
+  addon: string | null;
+}
+
+/** 联机 Mod 支持的游戏版本和加载器（和 online_mod.rs 里的 BUILDS 一致） */
+/** 内置联机 Mod 的版本（和 online_mod.rs 的 VERSION 一致） */
+export const ONLINE_MOD_VERSION = "1.3.0";
+export const ONLINE_MOD_BUILDS: { mc: string; loader: string; note: string }[] = [
+  { mc: "1.20.1", loader: "Fabric", note: "Fabric Loader 0.14.21+ · Java 17+" },
+  { mc: "1.20.1", loader: "Forge", note: "Forge 47+ · Java 17+" },
+  { mc: "1.21.1", loader: "Fabric", note: "Fabric Loader 0.15.0+ · Java 21+" },
+  { mc: "1.21.1", loader: "NeoForge", note: "NeoForge 21.1+ · Java 21+" },
+  { mc: "1.21.10", loader: "Fabric", note: "Fabric Loader 0.17.0+ · Java 21+" },
+  { mc: "1.21.10", loader: "NeoForge", note: "NeoForge 21.10+ · Java 21+" },
+  { mc: "1.21.11", loader: "Fabric", note: "Fabric Loader 0.17.0+ · Java 21+" },
+  { mc: "1.21.11", loader: "NeoForge", note: "NeoForge 21.11+ · Java 21+" },
+  { mc: "26.1.2", loader: "Fabric", note: "Fabric Loader 0.18.4+ · Java 25+" },
+  { mc: "26.1.2", loader: "NeoForge", note: "NeoForge 26.1.2+ · Java 25+" },
+  { mc: "26.3", loader: "Fabric", note: "Fabric Loader 0.18.4+ · Java 25+" },
+  { mc: "26.3", loader: "NeoForge", note: "NeoForge 26.3+ · Java 25+" },
+];
+export const onlineModSupports = (mc: string, loader: string) =>
+  ONLINE_MOD_BUILDS.some((b) => b.mc === mc && b.loader.toLowerCase() === loader.toLowerCase());
+
 export interface VersionSettings {
   java?: string | null;
   /** 0 表示自动分配 */
@@ -546,6 +578,16 @@ export const api = {
   setBackgroundImage: (path: string): Promise<string> => invoke("set_background_image", { path }),
   backgroundImage: (): Promise<string | null> => invoke("background_image"),
   isWin11: (): Promise<boolean> => invoke("is_win11"),
+  onlineModStatus: (gameDir: string, name: string, mc: string, loader: string): Promise<OnlineModStatus> =>
+    isTauri()
+      ? invoke("online_mod_status", { gameDir, name, mc, loader })
+      : Promise.resolve({ version: ONLINE_MOD_VERSION, supported: onlineModSupports(mc, loader), installed: null, addon: null }),
+  installOnlineMod: (gameDir: string, name: string, mc: string, loader: string, addon: boolean): Promise<OnlineModStatus> =>
+    isTauri()
+      ? invoke("install_online_mod", { gameDir, name, mc, loader, addon })
+      : new Promise((r) =>
+          setTimeout(() => r({ version: ONLINE_MOD_VERSION, supported: true, installed: `mconline-${loader.toLowerCase()}-${ONLINE_MOD_VERSION}.jar`, addon: addon ? `mconline-server-addon-${ONLINE_MOD_VERSION}.jar` : null }), 600),
+        ),
   memoryPlan: (gameDir: string, version: string | null): Promise<MemoryPlan> =>
     isTauri()
       ? invoke("memory_plan", { gameDir, version })

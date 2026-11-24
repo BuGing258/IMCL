@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw, Package, X, FolderInput } from "@lucide/svelte";
+  import { Search, Download as DownloadIcon, Check, LoaderCircle, Info, Puzzle, Sun, Image, ExternalLink, RefreshCw, Package, X, FolderInput, Users } from "@lucide/svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import Select from "$lib/components/Select.svelte";
   import ResVersionPicker from "$lib/components/ResVersionPicker.svelte";
   import ImportPackDialog from "$lib/components/ImportPackDialog.svelte";
-  import { library, toast, ui, nav, fmtCount, isTauri, settings, installs, cached, remember } from "$lib/state.svelte";
+  import OnlinePoster from "$lib/components/OnlinePoster.svelte";
+  import { library, toast, ui, nav, fmtCount, isTauri, settings, installs, cached, remember, isPreload } from "$lib/state.svelte";
   import { RES_LABELS, type MarketKind } from "$lib/mock";
   import { api, type Hit, type ModVersion, type ResDep } from "$lib/api";
 
@@ -141,10 +142,13 @@
     return false;
   }
 
+  // 预渲染时不读文件夹、不搜索（见 isPreload）
+  const preload = isPreload();
+
   // 真实版本先读一下文件夹，才知道哪些已经装了
   $effect(() => {
     const p = pack;
-    if (p?.real && !p.filesLoaded) nav.settled().then(() => library.loadFiles(p)).catch(() => {});
+    if (p?.real && !p.filesLoaded && !preload) nav.settled().then(() => library.loadFiles(p)).catch(() => {});
   });
 
   /* ---------- 搜索（输入停顿后再搜） ---------- */
@@ -191,12 +195,15 @@
   $effect(() => {
     // 依赖：类型、关键词、分类、排序、目标版本
     void [ui.resKind, ui.resQuery, cat, sort, pack?.id, loaderFilter];
+    // 预渲染时、在「联机」标签时不搜索
+    if (preload || ui.resOnline) return;
     clearTimeout(timer);
     timer = setTimeout(() => runSearch(false), ui.resQuery ? 350 : 0);
     return () => clearTimeout(timer);
   });
 
   function setKind(k: MarketKind) {
+    ui.resOnline = false;
     if (ui.resKind === k) return;
     ui.resKind = k;
     cat = "";
@@ -385,12 +392,18 @@
 
     <div class="kinds">
       {#each KINDS as { k, icon: Icon }}
-        <button class="kind" class:on={ui.resKind === k} onclick={() => setKind(k)}>
+        <button class="kind" class:on={!ui.resOnline && ui.resKind === k} onclick={() => setKind(k)}>
           <Icon size={18} />{RES_LABELS[k]}
         </button>
       {/each}
+      <button class="kind" class:on={ui.resOnline} onclick={() => (ui.resOnline = true)}>
+        <Users size={18} />联机
+      </button>
     </div>
 
+    {#if ui.resOnline}
+      <OnlinePoster {pack} />
+    {:else}
     {#if isPack}
       <!-- 整合包会新建版本，不需要先选版本 -->
     {:else if !pack}
@@ -548,6 +561,7 @@
         <div class="state"><button class="btn" onclick={() => runSearch(true)}>加载更多</button></div>
       {/if}
     {/if}
+    {/if}
   </div>
 </div>
 
@@ -564,7 +578,7 @@
   }
   .kinds {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 10px;
     margin-bottom: 14px;
   }

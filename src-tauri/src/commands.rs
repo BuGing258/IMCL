@@ -454,3 +454,15 @@ pub async fn trash_version_file(game_dir: String, name: String, kind: String, fi
     })
     .await
 }
+
+/* ---------------- 内置联机 Mod ---------------- */
+
+#[tauri::command]
+pub async fn online_mod_status(game_dir: String, name: String, mc: String, loader: String) -> CmdResult<crate::online_mod::Status> {
+    blocking(move || crate::online_mod::status(&PathBuf::from(game_dir), &name, &mc, &loader).map_err(err)).await
+}
+
+#[tauri::command]
+pub async fn install_online_mod(game_dir: String, name: String, mc: String, loader: String, addon: bool) -> CmdResult<crate::online_mod::Status> {
+    blocking(move || crate::online_mod::install(&PathBuf::from(game_dir), &name, &mc, &loader, addon).map_err(err)).await
+}
